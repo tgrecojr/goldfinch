@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use aws_sdk_secretsmanager::Client;
 use clap::{Parser, Subcommand, ValueEnum};
 use serde::Serialize;
@@ -91,8 +91,8 @@ async fn fetch_secret(client: &Client, secret_id: &str) -> Result<BTreeMap<Strin
         .secret_string()
         .context("Secret does not contain a string value")?;
 
-    let json: Value = serde_json::from_str(secret_string)
-        .context("Secret value is not valid JSON")?;
+    let json: Value =
+        serde_json::from_str(secret_string).context("Secret value is not valid JSON")?;
 
     match json {
         Value::Object(map) => {
@@ -192,7 +192,10 @@ mod tests {
         map.insert("api_key".to_string(), json!("abc123"));
         map.insert("db_password".to_string(), json!("secret123"));
         map.insert("prod_db_url".to_string(), json!("https://prod.example.com"));
-        map.insert("staging_db_url".to_string(), json!("https://staging.example.com"));
+        map.insert(
+            "staging_db_url".to_string(),
+            json!("https://staging.example.com"),
+        );
         map.insert("port".to_string(), json!(5432));
         map.insert("enabled".to_string(), json!(true));
         map.insert("disabled".to_string(), json!(false));
@@ -291,27 +294,27 @@ mod tests {
     #[test]
     fn test_get_key_json_format() {
         let secret = create_test_secret();
-        
+
         // Test with string value
         let result = get_key(&secret, "api_key", OutputFormat::Json);
         assert!(result.is_ok());
-        
+
         // Test with number value
         let result = get_key(&secret, "port", OutputFormat::Json);
         assert!(result.is_ok());
-        
+
         // Test with boolean value
         let result = get_key(&secret, "enabled", OutputFormat::Json);
         assert!(result.is_ok());
-        
+
         // Test with null value
         let result = get_key(&secret, "nullable", OutputFormat::Json);
         assert!(result.is_ok());
-        
+
         // Test with array value
         let result = get_key(&secret, "tags", OutputFormat::Json);
         assert!(result.is_ok());
-        
+
         // Test with object value
         let result = get_key(&secret, "config", OutputFormat::Json);
         assert!(result.is_ok());
