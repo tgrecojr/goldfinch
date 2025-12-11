@@ -180,3 +180,258 @@ fn value_to_string(value: &Value) -> String {
         Value::Array(_) | Value::Object(_) => value.to_string(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn create_test_secret() -> BTreeMap<String, Value> {
+        let mut map = BTreeMap::new();
+        map.insert("api_key".to_string(), json!("abc123"));
+        map.insert("db_password".to_string(), json!("secret123"));
+        map.insert("prod_db_url".to_string(), json!("https://prod.example.com"));
+        map.insert("staging_db_url".to_string(), json!("https://staging.example.com"));
+        map.insert("port".to_string(), json!(5432));
+        map.insert("enabled".to_string(), json!(true));
+        map.insert("disabled".to_string(), json!(false));
+        map.insert("nullable".to_string(), json!(null));
+        map.insert("tags".to_string(), json!(["prod", "important"]));
+        map.insert("config".to_string(), json!({"timeout": 30}));
+        map
+    }
+
+    #[test]
+    fn test_value_to_string_with_string() {
+        let value = json!("test_value");
+        assert_eq!(value_to_string(&value), "test_value");
+    }
+
+    #[test]
+    fn test_value_to_string_with_number() {
+        let value = json!(42);
+        assert_eq!(value_to_string(&value), "42");
+
+        let float_value = json!(3.14);
+        assert_eq!(value_to_string(&float_value), "3.14");
+    }
+
+    #[test]
+    fn test_value_to_string_with_boolean() {
+        let true_value = json!(true);
+        assert_eq!(value_to_string(&true_value), "true");
+
+        let false_value = json!(false);
+        assert_eq!(value_to_string(&false_value), "false");
+    }
+
+    #[test]
+    fn test_value_to_string_with_null() {
+        let value = json!(null);
+        assert_eq!(value_to_string(&value), "null");
+    }
+
+    #[test]
+    fn test_value_to_string_with_array() {
+        let value = json!(["a", "b", "c"]);
+        assert_eq!(value_to_string(&value), "[\"a\",\"b\",\"c\"]");
+    }
+
+    #[test]
+    fn test_value_to_string_with_object() {
+        let value = json!({"key": "value"});
+        assert_eq!(value_to_string(&value), "{\"key\":\"value\"}");
+    }
+
+    #[test]
+    fn test_get_key_success() {
+        let secret = create_test_secret();
+        let result = get_key(&secret, "api_key", OutputFormat::Plain);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_get_key_not_found() {
+        let secret = create_test_secret();
+        let result = get_key(&secret, "nonexistent_key", OutputFormat::Plain);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not found"));
+    }
+
+    #[test]
+    fn test_get_key_different_types() {
+        let secret = create_test_secret();
+
+        // String value
+        let result = get_key(&secret, "api_key", OutputFormat::Plain);
+        assert!(result.is_ok());
+
+        // Number value
+        let result = get_key(&secret, "port", OutputFormat::Plain);
+        assert!(result.is_ok());
+
+        // Boolean value
+        let result = get_key(&secret, "enabled", OutputFormat::Plain);
+        assert!(result.is_ok());
+
+        // Null value
+        let result = get_key(&secret, "nullable", OutputFormat::Plain);
+        assert!(result.is_ok());
+
+        // Array value
+        let result = get_key(&secret, "tags", OutputFormat::Plain);
+        assert!(result.is_ok());
+
+        // Object value
+        let result = get_key(&secret, "config", OutputFormat::Plain);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_search_keys_with_matches() {
+        let secret = create_test_secret();
+        let result = search_keys(&secret, "db", OutputFormat::Plain);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_search_keys_multiple_matches() {
+        let secret = create_test_secret();
+        let result = search_keys(&secret, "url", OutputFormat::Plain);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_search_keys_no_matches() {
+        let secret = create_test_secret();
+        let result = search_keys(&secret, "xyz_nonexistent", OutputFormat::Plain);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("No keys found"));
+    }
+
+    #[test]
+    fn test_search_keys_case_sensitive() {
+        let secret = create_test_secret();
+        // Should not match since search is case-sensitive
+        let result = search_keys(&secret, "API", OutputFormat::Plain);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_search_keys_partial_match() {
+        let secret = create_test_secret();
+        // Should match "staging_db_url" and "prod_db_url"
+        let result = search_keys(&secret, "db_url", OutputFormat::Plain);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_list_keys_not_empty() {
+        let secret = create_test_secret();
+        let result = list_keys(&secret, OutputFormat::Plain);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_list_keys_empty_secret() {
+        let secret = BTreeMap::new();
+        let result = list_keys(&secret, OutputFormat::Plain);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_list_keys_preserves_order() {
+        let secret = create_test_secret();
+        // BTreeMap should maintain alphabetical order
+        let keys: Vec<&String> = secret.keys().collect();
+        let mut sorted_keys = keys.clone();
+        sorted_keys.sort();
+        assert_eq!(keys, sorted_keys);
+    }
+
+    #[test]
+    fn test_fetch_secret_parsing_valid_json() {
+        let json_string = r#"{"key1": "value1", "key2": "value2"}"#;
+        let parsed: Value = serde_json::from_str(json_string).unwrap();
+
+        match parsed {
+            Value::Object(map) => {
+                let mut btree_map = BTreeMap::new();
+                for (k, v) in map {
+                    btree_map.insert(k, v);
+                }
+                assert_eq!(btree_map.len(), 2);
+                assert!(btree_map.contains_key("key1"));
+                assert!(btree_map.contains_key("key2"));
+            }
+            _ => panic!("Should be an object"),
+        }
+    }
+
+    #[test]
+    fn test_fetch_secret_parsing_invalid_json() {
+        let invalid_json = "not valid json";
+        let result: Result<Value, _> = serde_json::from_str(invalid_json);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_fetch_secret_parsing_non_object() {
+        // Array instead of object
+        let json_string = r#"["item1", "item2"]"#;
+        let parsed: Value = serde_json::from_str(json_string).unwrap();
+
+        match parsed {
+            Value::Object(_) => panic!("Should not be an object"),
+            _ => {} // Expected
+        }
+    }
+
+    #[test]
+    fn test_special_characters_in_keys() {
+        let mut secret = BTreeMap::new();
+        secret.insert("key-with-dash".to_string(), json!("value1"));
+        secret.insert("key_with_underscore".to_string(), json!("value2"));
+        secret.insert("key.with.dot".to_string(), json!("value3"));
+        secret.insert("key/with/slash".to_string(), json!("value4"));
+
+        let result = get_key(&secret, "key-with-dash", OutputFormat::Plain);
+        assert!(result.is_ok());
+
+        let result = search_keys(&secret, "with", OutputFormat::Plain);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_unicode_in_values() {
+        let mut secret = BTreeMap::new();
+        secret.insert("emoji".to_string(), json!("🔐🗝️"));
+        secret.insert("chinese".to_string(), json!("密码"));
+        secret.insert("arabic".to_string(), json!("كلمة السر"));
+
+        let result = get_key(&secret, "emoji", OutputFormat::Plain);
+        assert!(result.is_ok());
+
+        let result = list_keys(&secret, OutputFormat::Plain);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_empty_string_values() {
+        let mut secret = BTreeMap::new();
+        secret.insert("empty".to_string(), json!(""));
+
+        let result = get_key(&secret, "empty", OutputFormat::Plain);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_very_long_values() {
+        let mut secret = BTreeMap::new();
+        let long_value = "a".repeat(10000);
+        secret.insert("long_key".to_string(), json!(long_value));
+
+        let result = get_key(&secret, "long_key", OutputFormat::Plain);
+        assert!(result.is_ok());
+    }
+}

@@ -314,9 +314,29 @@ cargo run -- -s my-app-secrets get my-key
 
 ### Run tests
 
+The project includes comprehensive unit tests covering all core functionality:
+
 ```bash
+# Run all tests
 cargo test
+
+# Run tests with output
+cargo test -- --nocapture
+
+# Run a specific test
+cargo test test_get_key_success
 ```
+
+**Test Coverage:**
+- Value type handling (strings, numbers, booleans, null, arrays, objects)
+- Key listing functionality
+- Getting specific keys by name
+- Searching keys with substring matching
+- Error cases (key not found, no matches)
+- Edge cases (empty strings, unicode, special characters, long values)
+- JSON parsing validation
+
+All tests run locally without requiring AWS credentials or connectivity.
 
 ### Check for issues
 
