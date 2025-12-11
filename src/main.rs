@@ -9,6 +9,7 @@ use std::env;
 #[derive(Parser)]
 #[command(name = "goldfinch")]
 #[command(about = "A CLI tool to read key-value pairs from an AWS Secret", long_about = None)]
+#[command(version)]
 struct Cli {
     /// AWS Secret name or ARN (can also be set via GOLDFINCH_SECRET env var)
     #[arg(short, long)]
