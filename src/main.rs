@@ -288,6 +288,43 @@ mod tests {
     }
 
     #[test]
+    fn test_get_key_json_format() {
+        let secret = create_test_secret();
+        
+        // Test with string value
+        let result = get_key(&secret, "api_key", OutputFormat::Json);
+        assert!(result.is_ok());
+        
+        // Test with number value
+        let result = get_key(&secret, "port", OutputFormat::Json);
+        assert!(result.is_ok());
+        
+        // Test with boolean value
+        let result = get_key(&secret, "enabled", OutputFormat::Json);
+        assert!(result.is_ok());
+        
+        // Test with null value
+        let result = get_key(&secret, "nullable", OutputFormat::Json);
+        assert!(result.is_ok());
+        
+        // Test with array value
+        let result = get_key(&secret, "tags", OutputFormat::Json);
+        assert!(result.is_ok());
+        
+        // Test with object value
+        let result = get_key(&secret, "config", OutputFormat::Json);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_get_key_json_format_not_found() {
+        let secret = create_test_secret();
+        let result = get_key(&secret, "nonexistent_key", OutputFormat::Json);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not found"));
+    }
+
+    #[test]
     fn test_search_keys_with_matches() {
         let secret = create_test_secret();
         let result = search_keys(&secret, "db", OutputFormat::Plain);
@@ -326,6 +363,28 @@ mod tests {
     }
 
     #[test]
+    fn test_search_keys_json_format_with_matches() {
+        let secret = create_test_secret();
+        let result = search_keys(&secret, "db", OutputFormat::Json);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_search_keys_json_format_multiple_matches() {
+        let secret = create_test_secret();
+        let result = search_keys(&secret, "url", OutputFormat::Json);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_search_keys_json_format_no_matches() {
+        let secret = create_test_secret();
+        let result = search_keys(&secret, "xyz_nonexistent", OutputFormat::Json);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("No keys found"));
+    }
+
+    #[test]
     fn test_list_keys_not_empty() {
         let secret = create_test_secret();
         let result = list_keys(&secret, OutputFormat::Plain);
@@ -347,6 +406,20 @@ mod tests {
         let mut sorted_keys = keys.clone();
         sorted_keys.sort();
         assert_eq!(keys, sorted_keys);
+    }
+
+    #[test]
+    fn test_list_keys_json_format() {
+        let secret = create_test_secret();
+        let result = list_keys(&secret, OutputFormat::Json);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_list_keys_json_format_empty() {
+        let secret = BTreeMap::new();
+        let result = list_keys(&secret, OutputFormat::Json);
+        assert!(result.is_ok());
     }
 
     #[test]
