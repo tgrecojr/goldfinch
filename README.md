@@ -4,16 +4,20 @@ A command-line tool for reading key-value pairs from AWS Secrets Manager secrets
 
 ## Features
 
-- **List all keys**: Display all keys across all secrets in your AWS account
+- **List all secrets**: Display all top-level secret names in your AWS account
 - **Get by exact key name**: Retrieve a specific key's value from any secret
-- **Search**: Find keys matching a substring pattern across all secrets
+- **Search**: Find secrets and keys matching a substring pattern (searches both secret names and key names)
 - **Automatic discovery**: Automatically searches all AWS secrets in your account
 - **Flexible output**: JSON format (default) or plain text
 - **Read-only**: Safe operations with no ability to modify or create secrets
 
 ## How it Works
 
-Goldfinch automatically discovers and reads all AWS Secrets Manager secrets in your AWS account that contain JSON key-value pairs. The key-value pairs from all secrets are merged together, and commands operate on the combined keys and values.
+Goldfinch automatically discovers all AWS Secrets Manager secrets in your AWS account.
+
+- **`list` command**: Shows all top-level secret names
+- **`get` command**: Retrieves a specific key's value by searching across all secrets
+- **`search` command**: Searches both secret names and key names within secrets
 
 For example, if you have two secrets in your account:
 
@@ -33,7 +37,9 @@ For example, if you have two secrets in your account:
 }
 ```
 
-Goldfinch will automatically merge all keys from both secrets for listing, searching, and retrieval operations.
+- `list` will show: `my-app-config`, `my-app-urls`
+- `search app` will find the secret names containing "app" plus any keys containing "app"
+- `get api_key` will retrieve the value from `my-app-config`
 
 ## Prerequisites
 
@@ -65,7 +71,7 @@ This will install `goldfinch` to your Cargo bin directory (usually `~/.cargo/bin
 
 Goldfinch automatically operates on all secrets in your AWS account. You don't need to specify which secrets to use.
 
-### List all keys
+### List all secret names
 
 ```bash
 # JSON format (default)
@@ -78,19 +84,15 @@ goldfinch list --format plain
 Output (JSON):
 ```json
 [
-  "api_key",
-  "db_password",
-  "prod_db_url",
-  "staging_db_url"
+  "my-app-config",
+  "my-app-urls"
 ]
 ```
 
 Output (plain):
 ```
-api_key
-db_password
-prod_db_url
-staging_db_url
+my-app-config
+my-app-urls
 ```
 
 ### Get a specific key's value
@@ -116,46 +118,48 @@ Output (plain):
 secret123
 ```
 
-### Search for keys
+### Search for secrets and keys
 
-Search uses substring matching - it will find any key whose name contains the pattern across all secrets:
+Search uses substring matching - it will find:
+1. Secret names containing the pattern (displayed with `[Secret]` prefix)
+2. Key names within secrets containing the pattern (displayed as `secret-name/key-name`)
 
 ```bash
-# Find all keys containing "db" across all secrets
-goldfinch search db
+# Find all secrets and keys containing "app"
+goldfinch search app
 
-# Find all keys containing "url" in plain format
+# Find all secrets and keys containing "url" in plain format
 goldfinch search url --format plain
 ```
 
-Output (JSON):
+Output (JSON) for `goldfinch search app`:
 ```json
 [
   {
-    "key": "db_password",
-    "value": "secret123"
+    "key": "[Secret] my-app-config",
+    "value": "2 keys"
   },
   {
-    "key": "prod_db_url",
-    "value": "https://prod.example.com"
+    "key": "[Secret] my-app-urls",
+    "value": "2 keys"
   },
   {
-    "key": "staging_db_url",
-    "value": "https://staging.example.com"
+    "key": "my-app-config/api_key",
+    "value": "abc123"
   }
 ]
 ```
 
-Output (plain):
+Output (plain) for `goldfinch search url`:
 ```
-db_password: secret123
-prod_db_url: https://prod.example.com
-staging_db_url: https://staging.example.com
+[Secret] my-app-urls: 2 keys
+my-app-urls/prod_db_url: https://prod.example.com
+my-app-urls/staging_db_url: https://staging.example.com
 ```
 
 ## Common Use Cases
 
-**List all available keys:**
+**List all available secrets:**
 ```bash
 goldfinch list
 ```
@@ -165,9 +169,14 @@ goldfinch list
 goldfinch get db_password --format plain | some-other-command
 ```
 
-**Search and process with jq:**
+**Search for secrets containing a pattern:**
 ```bash
-goldfinch search prod | jq '.[] | .key'
+goldfinch search prod
+```
+
+**Search and process with jq to get only key names:**
+```bash
+goldfinch search app | jq '.[] | .key'
 ```
 
 **Export secret value to environment variable:**
@@ -247,7 +256,7 @@ The application provides clear error messages for common issues:
 - **Invalid JSON**: "Secret value is not valid JSON"
 - **Not a JSON object**: "Secret value is not a JSON object with key-value pairs"
 - **Key not found**: "Key 'key-name' not found in secret" (searches across all secrets)
-- **No search results**: "No keys found matching pattern 'pattern'" (searches across all secrets)
+- **No search results**: "No secrets or keys found matching pattern 'pattern'" (searches both secret names and keys)
 - **Access denied**: "Not authorized to perform operation"
 
 ## Development
@@ -325,46 +334,40 @@ Secret `env-config`:
 ```
 
 ```bash
-# List all keys from all secrets in your account
+# List all secrets in your account
 goldfinch list --format plain
 # Output:
-# api_key
-# api_timeout_ms
-# app_name
-# database_url
-# enable_cache
-# log_level
-# redis_host
-# redis_port
+# app-config
+# env-config
 
 # Get database connection string
 DB_URL=$(goldfinch get database_url --format plain)
 
-# Find all Redis-related configuration
+# Find all secrets and keys related to Redis
 goldfinch search redis
 # Output (JSON):
 # [
 #   {
-#     "key": "redis_host",
+#     "key": "app-config/redis_host",
 #     "value": "localhost"
 #   },
 #   {
-#     "key": "redis_port",
+#     "key": "app-config/redis_port",
 #     "value": "6379"
 #   }
 # ]
 
-# Search across all secrets
+# Search for secrets containing "app" in their name
 goldfinch search app
 # Output (JSON):
 # [
 #   {
-#     "key": "app_name",
-#     "value": "myapp"
+#     "key": "[Secret] app-config",
+#     "value": "5 keys"
 #   },
 #   {
-#     "key": "api_timeout_ms",
-#     "value": "5000"
+#     "key": "env-config/app_name",
+#     "value": "myapp"
 #   }
 # ]
 ```

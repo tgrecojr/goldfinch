@@ -1,26 +1,36 @@
 # Goldfinch - Project Status
 
-## Current Iteration: VERIFIED COMPLETE ✅
+## Latest Iteration: COMPLETE ✅
 
-The requested modification has already been completed. The application now operates on **all** AWS Secrets Manager secrets automatically without requiring any manual configuration.
+The application has been successfully modified according to the primary goal.
 
-## Verification Completed
+## Changes Implemented
 
-✅ No `--secrets` flag in CLI
-✅ No `GOLDFINCH_SECRETS` environment variable references
-✅ Automatic secret discovery via `list_all_secrets()` function
-✅ All 40 tests passing (31 unit + 9 integration)
-✅ Clean CLI interface with only `--format` flag
-✅ Documentation updated to reflect automatic discovery
+1. **`list` command**: Now displays only top-level secret names (not the K/V pairs)
+   - Previously: Listed all merged key names from all secrets
+   - Now: Lists secret names only (e.g., `my-app-config`, `my-app-urls`)
 
-## How It Works
+2. **`search` command**: Now searches BOTH secret names AND keys within them
+   - Previously: Only searched key names
+   - Now:
+     - Finds secrets with names matching the pattern (shown as `[Secret] name: N keys`)
+     - Finds keys within secrets matching the pattern (shown as `secret-name/key-name: value`)
 
-The application automatically:
-1. Discovers all secrets using AWS `ListSecrets` API with pagination (src/main.rs:106-120)
-2. Fetches each secret's JSON content
-3. Merges all key-value pairs from all secrets
-4. Operates on the combined dataset
+3. **`get` command**: Unchanged - still retrieves specific key values from any secret
 
-## No Further Action Needed
+## Verification
 
-The primary goal is fully achieved. All commands (list, get, search) work across all secrets in the AWS account without any user configuration required.
+✅ `list` command shows secret names only
+✅ `search` command searches both secret names and keys
+✅ All 42 tests passing (33 unit + 9 integration)
+✅ README documentation fully updated with new behavior and examples
+✅ CLI help text updated with accurate command descriptions
+
+## Technical Details
+
+- Modified `list_keys()` to accept `&[String]` of secret names instead of merged K/V pairs
+- Modified `search_keys()` to accept `BTreeMap<String, BTreeMap<String, Value>>` to search hierarchically
+- Added `create_test_secrets_with_data()` helper for testing hierarchical secret structure
+- Updated main() to only fetch secrets when needed (list doesn't fetch, search/get do)
+
+No further action needed. The modification is complete.
