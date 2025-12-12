@@ -15,10 +15,7 @@ fn test_cli_help_flag() {
 fn test_cli_get_command_without_credentials() {
     // This will fail without AWS credentials, but tests that CLI parsing works
     let mut cmd = Command::cargo_bin("goldfinch").unwrap();
-    cmd.arg("get")
-        .arg("some-key")
-        .assert()
-        .failure(); // Expected to fail due to AWS credentials
+    cmd.arg("get").arg("some-key").assert().failure(); // Expected to fail due to AWS credentials
 }
 
 #[test]
@@ -27,27 +24,23 @@ fn test_cli_list_command_structure() {
     let mut cmd = Command::cargo_bin("goldfinch").unwrap();
     let assert = cmd.arg("list").assert();
     // Either succeeds with credentials or fails without them
-    let _ = assert.try_success().or_else(|_| cmd.arg("list").assert().try_failure());
+    let _ = assert
+        .try_success()
+        .or_else(|_| cmd.arg("list").assert().try_failure());
 }
 
 #[test]
 fn test_cli_get_command_structure() {
     // This will fail without AWS credentials, but tests that CLI parsing works
     let mut cmd = Command::cargo_bin("goldfinch").unwrap();
-    cmd.arg("get")
-        .arg("some-key")
-        .assert()
-        .failure(); // Expected to fail due to AWS credentials, but parsing should work
+    cmd.arg("get").arg("some-key").assert().failure(); // Expected to fail due to AWS credentials, but parsing should work
 }
 
 #[test]
 fn test_cli_search_command_structure() {
     // This will fail without AWS credentials, but tests that CLI parsing works
     let mut cmd = Command::cargo_bin("goldfinch").unwrap();
-    cmd.arg("search")
-        .arg("pattern")
-        .assert()
-        .failure(); // Expected to fail due to AWS credentials, but parsing should work
+    cmd.arg("search").arg("pattern").assert().failure(); // Expected to fail due to AWS credentials, but parsing should work
 }
 
 #[test]
@@ -104,4 +97,3 @@ fn test_cli_version_flag() {
         .success()
         .stdout(predicate::str::contains("goldfinch"));
 }
-
