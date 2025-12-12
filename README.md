@@ -5,7 +5,7 @@ A command-line tool for reading key-value pairs from AWS Secrets Manager secrets
 ## Features
 
 - **List all secrets**: Display all top-level secret names in your AWS account
-- **Get by exact key name**: Retrieve a specific key's value from any secret
+- **Get secret contents**: Retrieve all key-value pairs from a specific secret by name
 - **Search**: Find secrets and keys matching a substring pattern (searches both secret names and key names)
 - **Automatic discovery**: Automatically searches all AWS secrets in your account
 - **Flexible output**: JSON format (default) or plain text
@@ -16,7 +16,7 @@ A command-line tool for reading key-value pairs from AWS Secrets Manager secrets
 Goldfinch automatically discovers all AWS Secrets Manager secrets in your AWS account.
 
 - **`list` command**: Shows all top-level secret names
-- **`get` command**: Retrieves a specific key's value by searching across all secrets
+- **`get <secret_name>` command**: Retrieves all key-value pairs from a specific secret
 - **`search` command**: Searches both secret names and key names within secrets
 
 For example, if you have two secrets in your account:
@@ -39,7 +39,7 @@ For example, if you have two secrets in your account:
 
 - `list` will show: `my-app-config`, `my-app-urls`
 - `search app` will find the secret names containing "app" plus any keys containing "app"
-- `get api_key` will retrieve the value from `my-app-config`
+- `get my-app-config` will retrieve all key-value pairs from `my-app-config`
 
 ## Prerequisites
 
@@ -95,27 +95,28 @@ my-app-config
 my-app-urls
 ```
 
-### Get a specific key's value
+### Get all key-value pairs from a secret
 
 ```bash
-# JSON format with metadata
-goldfinch get db_password
+# JSON format (default)
+goldfinch get my-app-config
 
-# Plain text format (just the value)
-goldfinch get db_password --format plain
+# Plain text format
+goldfinch get my-app-config --format plain
 ```
 
 Output (JSON):
 ```json
 {
-  "key": "db_password",
-  "value": "secret123"
+  "api_key": "abc123",
+  "db_password": "secret123"
 }
 ```
 
 Output (plain):
 ```
-secret123
+api_key: abc123
+db_password: secret123
 ```
 
 ### Search for secrets and keys
@@ -164,9 +165,9 @@ my-app-urls/staging_db_url: https://staging.example.com
 goldfinch list
 ```
 
-**Pipe secret value to another command:**
+**Get a secret in JSON format and pipe to jq:**
 ```bash
-goldfinch get db_password --format plain | some-other-command
+goldfinch get my-app-config | jq '.api_key'
 ```
 
 **Search for secrets containing a pattern:**
@@ -179,9 +180,10 @@ goldfinch search prod
 goldfinch search app | jq '.[] | .key'
 ```
 
-**Export secret value to environment variable:**
+**Extract a specific value from a secret:**
 ```bash
-export API_KEY=$(goldfinch get api_key --format plain)
+# Using jq to extract a specific key
+export API_KEY=$(goldfinch get my-app-config | jq -r '.api_key')
 ```
 
 ## Value Type Handling
@@ -255,7 +257,6 @@ The application provides clear error messages for common issues:
 - **Secret not found**: "Failed to fetch secret 'name'"
 - **Invalid JSON**: "Secret value is not valid JSON"
 - **Not a JSON object**: "Secret value is not a JSON object with key-value pairs"
-- **Key not found**: "Key 'key-name' not found in secret" (searches across all secrets)
 - **No search results**: "No secrets or keys found matching pattern 'pattern'" (searches both secret names and keys)
 - **Access denied**: "Not authorized to perform operation"
 
@@ -265,7 +266,7 @@ The application provides clear error messages for common issues:
 
 ```bash
 cargo run -- list
-cargo run -- get my-key
+cargo run -- get my-app-config
 cargo run -- search pattern
 ```
 
@@ -281,15 +282,15 @@ cargo test
 cargo test -- --nocapture
 
 # Run a specific test
-cargo test test_get_key_success
+cargo test test_get_secret_success
 ```
 
 **Test Coverage:**
 - Value type handling (strings, numbers, booleans, null, arrays, objects)
-- Key listing functionality
-- Getting specific keys by name
-- Searching keys with substring matching
-- Error cases (key not found, no matches)
+- Secret listing functionality
+- Getting all key-value pairs from a secret by name
+- Searching secrets and keys with substring matching
+- Error cases (no matches, invalid JSON)
 - Edge cases (empty strings, unicode, special characters, long values)
 - JSON parsing validation
 
@@ -340,8 +341,8 @@ goldfinch list --format plain
 # app-config
 # env-config
 
-# Get database connection string
-DB_URL=$(goldfinch get database_url --format plain)
+# Get all values from app-config secret
+goldfinch get app-config
 
 # Find all secrets and keys related to Redis
 goldfinch search redis

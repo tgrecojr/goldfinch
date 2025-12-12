@@ -25,12 +25,12 @@ goldfinch/
 
 ## Commands
 The tool provides three main commands:
-- `list` - Display all keys across all secrets
-- `get <KEY>` - Retrieve a specific key's value from any secret
-- `search <PATTERN>` - Find keys matching a substring pattern across all secrets
+- `list` - Display all secret names in your AWS account
+- `get <SECRET_NAME>` - Retrieve all key-value pairs from a specific secret by name
+- `search <PATTERN>` - Find secrets and keys matching a substring pattern (searches both secret names and key names)
 
 Configuration:
 - No configuration required - automatically discovers and operates on all secrets in the AWS account
 
 ## Automatic Secret Discovery
-The tool automatically discovers all AWS Secrets Manager secrets in your account using the `ListSecrets` API. All secrets containing JSON key-value pairs are merged together, and commands operate on the combined data from all secrets.
+The tool automatically discovers all AWS Secrets Manager secrets in your account using the `ListSecrets` API. Commands can list secret names, retrieve all contents from a specific secret, or search across both secret names and keys within secrets.
