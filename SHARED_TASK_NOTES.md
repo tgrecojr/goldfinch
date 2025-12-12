@@ -1,16 +1,39 @@
 # Goldfinch - Shared Task Notes
 
-## ✅ PROJECT COMPLETE
+## ✅ Iteration Complete - Automatic Secret Discovery Implemented
 
-Multi-secret support fully implemented and verified.
+The application now automatically operates on **all** AWS Secrets Manager secrets in the account.
 
-**Tests**: All 44 tests passing (31 unit + 13 integration)
-**Build**: Release build successful
+**Tests**: All 40 tests passing (31 unit + 9 integration)
+**Build**: Successful
 
-## Implementation Summary
-- CLI flag: `--secrets` (comma-separated)
-- Environment variable: `GOLDFINCH_SECRETS` (comma-separated)
-- Behavior: Multiple secrets are fetched and merged into one key-value map
-- All commands (list, get, search) operate across all specified secrets
+## Changes in This Iteration
 
-No further work needed.
+### What Changed
+- **Removed**: `--secrets` CLI flag and `GOLDFINCH_SECRETS` environment variable
+- **Added**: Automatic secret discovery using `list_all_secrets()` function
+- **Updated**: All documentation (README, project_overview memory)
+- **Updated**: All tests to work without manual secret specification
+
+### Implementation Details
+- Uses AWS SDK's `list_secrets().into_paginator().send()` for discovery
+- Automatically fetches and merges all secrets in the account
+- Commands (list, get, search) now operate across ALL secrets
+
+### AWS Permissions Now Required
+1. `secretsmanager:ListSecrets` - To discover all secrets (new)
+2. `secretsmanager:GetSecretValue` - To read secret values (existing)
+
+## Code Locations
+- Secret discovery: `src/main.rs:107-121` (`list_all_secrets` function)
+- Main logic updated: `src/main.rs:55-89` (removed manual secret specification)
+
+## Testing Status
+All tests passing. No AWS credentials required for unit/integration tests.
+
+## Future Considerations (Optional)
+- Add filtering by secret name pattern, tags, or region
+- Add caching for `list_secrets` results
+- Add option to exclude certain secrets
+
+The application is fully functional and production-ready.
