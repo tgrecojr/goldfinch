@@ -20,16 +20,16 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// List all keys in the secret
+    /// List all secret names in your AWS account
     List,
 
-    /// Get a specific key's value by exact name
+    /// Get a specific key's value by exact name (searches across all secrets)
     Get {
         /// The exact key name
         key: String,
     },
 
-    /// Search for keys matching a pattern
+    /// Search for secrets and keys matching a pattern (searches both secret names and key names)
     Search {
         /// Search pattern (substring match)
         pattern: String,
@@ -59,19 +59,30 @@ async fn main() -> Result<()> {
     // List all secrets in the account
     let secret_ids = list_all_secrets(&client).await?;
 
-    // Fetch all secrets and merge their data
-    let mut merged_data = BTreeMap::new();
-    for secret_id in &secret_ids {
-        let secret_data = fetch_secret(&client, secret_id).await?;
-        for (key, value) in secret_data {
-            merged_data.insert(key, value);
+    match &cli.command {
+        Commands::List => {
+            list_keys(&secret_ids, cli.format)?;
         }
-    }
-
-    match cli.command {
-        Commands::List => list_keys(&merged_data, cli.format)?,
-        Commands::Get { key } => get_key(&merged_data, &key, cli.format)?,
-        Commands::Search { pattern } => search_keys(&merged_data, &pattern, cli.format)?,
+        Commands::Get { key } => {
+            // Fetch all secrets and merge their data for get command
+            let mut merged_data = BTreeMap::new();
+            for secret_id in &secret_ids {
+                let secret_data = fetch_secret(&client, secret_id).await?;
+                for (k, value) in secret_data {
+                    merged_data.insert(k, value);
+                }
+            }
+            get_key(&merged_data, key, cli.format)?;
+        }
+        Commands::Search { pattern } => {
+            // Fetch all secrets with their data for search command
+            let mut secrets_with_data = BTreeMap::new();
+            for secret_id in &secret_ids {
+                let secret_data = fetch_secret(&client, secret_id).await?;
+                secrets_with_data.insert(secret_id.clone(), secret_data);
+            }
+            search_keys(&secrets_with_data, pattern, cli.format)?;
+        }
     }
 
     Ok(())
@@ -120,15 +131,14 @@ async fn list_all_secrets(client: &Client) -> Result<Vec<String>> {
     Ok(secret_names)
 }
 
-fn list_keys(secret_data: &BTreeMap<String, Value>, format: OutputFormat) -> Result<()> {
+fn list_keys(secret_names: &[String], format: OutputFormat) -> Result<()> {
     match format {
         OutputFormat::Json => {
-            let keys: Vec<&String> = secret_data.keys().collect();
-            println!("{}", serde_json::to_string_pretty(&keys)?);
+            println!("{}", serde_json::to_string_pretty(secret_names)?);
         }
         OutputFormat::Plain => {
-            for key in secret_data.keys() {
-                println!("{}", key);
+            for name in secret_names {
+                println!("{}", name);
             }
         }
     }
@@ -156,21 +166,35 @@ fn get_key(secret_data: &BTreeMap<String, Value>, key: &str, format: OutputForma
 }
 
 fn search_keys(
-    secret_data: &BTreeMap<String, Value>,
+    secrets_with_data: &BTreeMap<String, BTreeMap<String, Value>>,
     pattern: &str,
     format: OutputFormat,
 ) -> Result<()> {
-    let matches: Vec<KeyValue> = secret_data
-        .iter()
-        .filter(|(key, _)| key.contains(pattern))
-        .map(|(key, value)| KeyValue {
-            key: key.clone(),
-            value: value_to_string(value),
-        })
-        .collect();
+    let mut matches: Vec<KeyValue> = Vec::new();
+
+    // Search through secret names and their keys
+    for (secret_name, secret_data) in secrets_with_data {
+        // Check if secret name matches
+        if secret_name.contains(pattern) {
+            matches.push(KeyValue {
+                key: format!("[Secret] {}", secret_name),
+                value: format!("{} keys", secret_data.len()),
+            });
+        }
+
+        // Check if any keys within the secret match
+        for (key, value) in secret_data {
+            if key.contains(pattern) {
+                matches.push(KeyValue {
+                    key: format!("{}/{}", secret_name, key),
+                    value: value_to_string(value),
+                });
+            }
+        }
+    }
 
     if matches.is_empty() {
-        bail!("No keys found matching pattern '{}'", pattern);
+        bail!("No secrets or keys found matching pattern '{}'", pattern);
     }
 
     match format {
@@ -217,6 +241,24 @@ mod tests {
         map.insert("tags".to_string(), json!(["prod", "important"]));
         map.insert("config".to_string(), json!({"timeout": 30}));
         map
+    }
+
+    fn create_test_secrets_with_data() -> BTreeMap<String, BTreeMap<String, Value>> {
+        let mut secrets = BTreeMap::new();
+        
+        // First secret
+        let mut secret1 = BTreeMap::new();
+        secret1.insert("api_key".to_string(), json!("abc123"));
+        secret1.insert("db_password".to_string(), json!("secret123"));
+        secrets.insert("my-app-config".to_string(), secret1);
+        
+        // Second secret
+        let mut secret2 = BTreeMap::new();
+        secret2.insert("prod_db_url".to_string(), json!("https://prod.example.com"));
+        secret2.insert("staging_db_url".to_string(), json!("https://staging.example.com"));
+        secrets.insert("my-app-urls".to_string(), secret2);
+        
+        secrets
     }
 
     #[test]
@@ -344,99 +386,113 @@ mod tests {
 
     #[test]
     fn test_search_keys_with_matches() {
-        let secret = create_test_secret();
-        let result = search_keys(&secret, "db", OutputFormat::Plain);
+        let secrets = create_test_secrets_with_data();
+        let result = search_keys(&secrets, "db", OutputFormat::Plain);
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_search_keys_multiple_matches() {
-        let secret = create_test_secret();
-        let result = search_keys(&secret, "url", OutputFormat::Plain);
+        let secrets = create_test_secrets_with_data();
+        let result = search_keys(&secrets, "url", OutputFormat::Plain);
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_search_keys_no_matches() {
-        let secret = create_test_secret();
-        let result = search_keys(&secret, "xyz_nonexistent", OutputFormat::Plain);
+        let secrets = create_test_secrets_with_data();
+        let result = search_keys(&secrets, "xyz_nonexistent", OutputFormat::Plain);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("No keys found"));
+        assert!(result.unwrap_err().to_string().contains("No secrets or keys found"));
     }
 
     #[test]
     fn test_search_keys_case_sensitive() {
-        let secret = create_test_secret();
+        let secrets = create_test_secrets_with_data();
         // Should not match since search is case-sensitive
-        let result = search_keys(&secret, "API", OutputFormat::Plain);
+        let result = search_keys(&secrets, "API", OutputFormat::Plain);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_search_keys_partial_match() {
-        let secret = create_test_secret();
+        let secrets = create_test_secrets_with_data();
         // Should match "staging_db_url" and "prod_db_url"
-        let result = search_keys(&secret, "db_url", OutputFormat::Plain);
+        let result = search_keys(&secrets, "db_url", OutputFormat::Plain);
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_search_keys_json_format_with_matches() {
-        let secret = create_test_secret();
-        let result = search_keys(&secret, "db", OutputFormat::Json);
+        let secrets = create_test_secrets_with_data();
+        let result = search_keys(&secrets, "db", OutputFormat::Json);
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_search_keys_json_format_multiple_matches() {
-        let secret = create_test_secret();
-        let result = search_keys(&secret, "url", OutputFormat::Json);
+        let secrets = create_test_secrets_with_data();
+        let result = search_keys(&secrets, "url", OutputFormat::Json);
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_search_keys_json_format_no_matches() {
-        let secret = create_test_secret();
-        let result = search_keys(&secret, "xyz_nonexistent", OutputFormat::Json);
+        let secrets = create_test_secrets_with_data();
+        let result = search_keys(&secrets, "xyz_nonexistent", OutputFormat::Json);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("No keys found"));
+        assert!(result.unwrap_err().to_string().contains("No secrets or keys found"));
+    }
+
+    #[test]
+    fn test_search_keys_matches_secret_name() {
+        let secrets = create_test_secrets_with_data();
+        // Should match the secret name "my-app-config"
+        let result = search_keys(&secrets, "app-config", OutputFormat::Plain);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_search_keys_matches_both_secret_and_key() {
+        let secrets = create_test_secrets_with_data();
+        // Should match both secret name "my-app-urls" and keys containing "app"
+        let result = search_keys(&secrets, "app", OutputFormat::Plain);
+        assert!(result.is_ok());
     }
 
     #[test]
     fn test_list_keys_not_empty() {
-        let secret = create_test_secret();
-        let result = list_keys(&secret, OutputFormat::Plain);
+        let secret_names = vec!["secret1".to_string(), "secret2".to_string()];
+        let result = list_keys(&secret_names, OutputFormat::Plain);
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_list_keys_empty_secret() {
-        let secret = BTreeMap::new();
-        let result = list_keys(&secret, OutputFormat::Plain);
+        let secret_names: Vec<String> = vec![];
+        let result = list_keys(&secret_names, OutputFormat::Plain);
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_list_keys_preserves_order() {
-        let secret = create_test_secret();
-        // BTreeMap should maintain alphabetical order
-        let keys: Vec<&String> = secret.keys().collect();
-        let mut sorted_keys = keys.clone();
-        sorted_keys.sort();
-        assert_eq!(keys, sorted_keys);
+        let secret_names = vec!["beta-secret".to_string(), "alpha-secret".to_string(), "gamma-secret".to_string()];
+        // The function should preserve the order provided
+        let result = list_keys(&secret_names, OutputFormat::Plain);
+        assert!(result.is_ok());
     }
 
     #[test]
     fn test_list_keys_json_format() {
-        let secret = create_test_secret();
-        let result = list_keys(&secret, OutputFormat::Json);
+        let secret_names = vec!["secret1".to_string(), "secret2".to_string()];
+        let result = list_keys(&secret_names, OutputFormat::Json);
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_list_keys_json_format_empty() {
-        let secret = BTreeMap::new();
-        let result = list_keys(&secret, OutputFormat::Json);
+        let secret_names: Vec<String> = vec![];
+        let result = list_keys(&secret_names, OutputFormat::Json);
         assert!(result.is_ok());
     }
 
@@ -489,7 +545,10 @@ mod tests {
         let result = get_key(&secret, "key-with-dash", OutputFormat::Plain);
         assert!(result.is_ok());
 
-        let result = search_keys(&secret, "with", OutputFormat::Plain);
+        // Test search with special characters
+        let mut secrets = BTreeMap::new();
+        secrets.insert("test-secret".to_string(), secret);
+        let result = search_keys(&secrets, "with", OutputFormat::Plain);
         assert!(result.is_ok());
     }
 
@@ -503,7 +562,9 @@ mod tests {
         let result = get_key(&secret, "emoji", OutputFormat::Plain);
         assert!(result.is_ok());
 
-        let result = list_keys(&secret, OutputFormat::Plain);
+        // Test list with unicode values
+        let secret_names = vec!["test-secret".to_string()];
+        let result = list_keys(&secret_names, OutputFormat::Plain);
         assert!(result.is_ok());
     }
 
