@@ -23,10 +23,10 @@ enum Commands {
     /// List all secret names in your AWS account
     List,
 
-    /// Get a specific key's value by exact name (searches across all secrets)
+    /// Get all key-value pairs from a specific secret by name
     Get {
-        /// The exact key name
-        key: String,
+        /// The secret name
+        secret_name: String,
     },
 
     /// Search for secrets and keys matching a pattern (searches both secret names and key names)
@@ -63,16 +63,10 @@ async fn main() -> Result<()> {
         Commands::List => {
             list_keys(&secret_ids, cli.format)?;
         }
-        Commands::Get { key } => {
-            // Fetch all secrets and merge their data for get command
-            let mut merged_data = BTreeMap::new();
-            for secret_id in &secret_ids {
-                let secret_data = fetch_secret(&client, secret_id).await?;
-                for (k, value) in secret_data {
-                    merged_data.insert(k, value);
-                }
-            }
-            get_key(&merged_data, key, cli.format)?;
+        Commands::Get { secret_name } => {
+            // Fetch the specified secret and return all its k/v pairs
+            let secret_data = fetch_secret(&client, secret_name).await?;
+            get_secret(&secret_data, secret_name, cli.format)?;
         }
         Commands::Search { pattern } => {
             // Fetch all secrets with their data for search command
@@ -145,21 +139,15 @@ fn list_keys(secret_names: &[String], format: OutputFormat) -> Result<()> {
     Ok(())
 }
 
-fn get_key(secret_data: &BTreeMap<String, Value>, key: &str, format: OutputFormat) -> Result<()> {
-    let value = secret_data
-        .get(key)
-        .context(format!("Key '{}' not found in secret", key))?;
-
+fn get_secret(secret_data: &BTreeMap<String, Value>, _secret_name: &str, format: OutputFormat) -> Result<()> {
     match format {
         OutputFormat::Json => {
-            let kv = KeyValue {
-                key: key.to_string(),
-                value: value_to_string(value),
-            };
-            println!("{}", serde_json::to_string_pretty(&kv)?);
+            println!("{}", serde_json::to_string_pretty(&secret_data)?);
         }
         OutputFormat::Plain => {
-            println!("{}", value_to_string(value));
+            for (key, value) in secret_data {
+                println!("{}: {}", key, value_to_string(value));
+            }
         }
     }
     Ok(())
@@ -304,84 +292,25 @@ mod tests {
     }
 
     #[test]
-    fn test_get_key_success() {
+    fn test_get_secret_success() {
         let secret = create_test_secret();
-        let result = get_key(&secret, "api_key", OutputFormat::Plain);
+        let result = get_secret(&secret, "test-secret", OutputFormat::Plain);
         assert!(result.is_ok());
     }
 
     #[test]
-    fn test_get_key_not_found() {
+    fn test_get_secret_json_format() {
         let secret = create_test_secret();
-        let result = get_key(&secret, "nonexistent_key", OutputFormat::Plain);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("not found"));
-    }
-
-    #[test]
-    fn test_get_key_different_types() {
-        let secret = create_test_secret();
-
-        // String value
-        let result = get_key(&secret, "api_key", OutputFormat::Plain);
-        assert!(result.is_ok());
-
-        // Number value
-        let result = get_key(&secret, "port", OutputFormat::Plain);
-        assert!(result.is_ok());
-
-        // Boolean value
-        let result = get_key(&secret, "enabled", OutputFormat::Plain);
-        assert!(result.is_ok());
-
-        // Null value
-        let result = get_key(&secret, "nullable", OutputFormat::Plain);
-        assert!(result.is_ok());
-
-        // Array value
-        let result = get_key(&secret, "tags", OutputFormat::Plain);
-        assert!(result.is_ok());
-
-        // Object value
-        let result = get_key(&secret, "config", OutputFormat::Plain);
+        let result = get_secret(&secret, "test-secret", OutputFormat::Json);
         assert!(result.is_ok());
     }
 
     #[test]
-    fn test_get_key_json_format() {
+    fn test_get_secret_different_types() {
         let secret = create_test_secret();
-
-        // Test with string value
-        let result = get_key(&secret, "api_key", OutputFormat::Json);
+        // Test that get_secret returns all k/v pairs including different types
+        let result = get_secret(&secret, "test-secret", OutputFormat::Plain);
         assert!(result.is_ok());
-
-        // Test with number value
-        let result = get_key(&secret, "port", OutputFormat::Json);
-        assert!(result.is_ok());
-
-        // Test with boolean value
-        let result = get_key(&secret, "enabled", OutputFormat::Json);
-        assert!(result.is_ok());
-
-        // Test with null value
-        let result = get_key(&secret, "nullable", OutputFormat::Json);
-        assert!(result.is_ok());
-
-        // Test with array value
-        let result = get_key(&secret, "tags", OutputFormat::Json);
-        assert!(result.is_ok());
-
-        // Test with object value
-        let result = get_key(&secret, "config", OutputFormat::Json);
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_get_key_json_format_not_found() {
-        let secret = create_test_secret();
-        let result = get_key(&secret, "nonexistent_key", OutputFormat::Json);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("not found"));
     }
 
     #[test]
@@ -542,7 +471,7 @@ mod tests {
         secret.insert("key.with.dot".to_string(), json!("value3"));
         secret.insert("key/with/slash".to_string(), json!("value4"));
 
-        let result = get_key(&secret, "key-with-dash", OutputFormat::Plain);
+        let result = get_secret(&secret, "test-secret", OutputFormat::Plain);
         assert!(result.is_ok());
 
         // Test search with special characters
@@ -559,7 +488,7 @@ mod tests {
         secret.insert("chinese".to_string(), json!("密码"));
         secret.insert("arabic".to_string(), json!("كلمة السر"));
 
-        let result = get_key(&secret, "emoji", OutputFormat::Plain);
+        let result = get_secret(&secret, "test-secret", OutputFormat::Plain);
         assert!(result.is_ok());
 
         // Test list with unicode values
@@ -573,7 +502,7 @@ mod tests {
         let mut secret = BTreeMap::new();
         secret.insert("empty".to_string(), json!(""));
 
-        let result = get_key(&secret, "empty", OutputFormat::Plain);
+        let result = get_secret(&secret, "test-secret", OutputFormat::Plain);
         assert!(result.is_ok());
     }
 
@@ -583,7 +512,7 @@ mod tests {
         let long_value = "a".repeat(10000);
         secret.insert("long_key".to_string(), json!(long_value));
 
-        let result = get_key(&secret, "long_key", OutputFormat::Plain);
+        let result = get_secret(&secret, "test-secret", OutputFormat::Plain);
         assert!(result.is_ok());
     }
 }
