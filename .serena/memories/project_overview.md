@@ -18,7 +18,7 @@ goldfinch/
 ├── src/
 │   └── main.rs          # All source code (single file)
 ├── tests/
-│   └── cli_tests.rs     # Integration tests (11 tests)
+│   └── cli_tests.rs     # Integration tests (13 tests)
 ├── Cargo.toml           # Package configuration
 └── README.md            # Comprehensive documentation
 ```
@@ -30,5 +30,8 @@ The tool provides three main commands:
 - `search <PATTERN>` - Find keys matching a substring pattern
 
 Configuration via:
-- `--secret` or `-s` CLI flag
-- `GOLDFINCH_SECRET` environment variable
+- `--secrets` or `-s` CLI flag (comma-separated for multiple secrets)
+- `GOLDFINCH_SECRETS` environment variable (comma-separated for multiple secrets)
+
+## Multi-Secret Support
+The tool can work with one or more AWS secrets simultaneously. When multiple secrets are specified, their key-value pairs are merged together, and all commands (list, get, search) operate on the combined data.
