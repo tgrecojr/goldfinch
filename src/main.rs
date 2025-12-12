@@ -8,12 +8,12 @@ use std::env;
 
 #[derive(Parser)]
 #[command(name = "goldfinch")]
-#[command(about = "A CLI tool to read key-value pairs from an AWS Secret", long_about = None)]
+#[command(about = "A CLI tool to read key-value pairs from AWS Secrets", long_about = None)]
 #[command(version)]
 struct Cli {
-    /// AWS Secret name or ARN (can also be set via GOLDFINCH_SECRET env var)
-    #[arg(short, long)]
-    secret: Option<String>,
+    /// AWS Secret names or ARNs (can also be set via GOLDFINCH_SECRETS env var, comma-separated)
+    #[arg(short, long, value_delimiter = ',')]
+    secrets: Vec<String>,
 
     #[command(subcommand)]
     command: Commands,
@@ -57,23 +57,33 @@ struct KeyValue {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    let secret_id = cli.secret
-        .or_else(|| env::var("GOLDFINCH_SECRET").ok())
-        .context(
-            "Secret name is required. Provide it via --secret flag or GOLDFINCH_SECRET environment variable"
-        )?;
+    let secret_ids = if !cli.secrets.is_empty() {
+        cli.secrets
+    } else if let Ok(env_secrets) = env::var("GOLDFINCH_SECRETS") {
+        env_secrets.split(',').map(|s| s.trim().to_string()).collect()
+    } else {
+        bail!(
+            "Secret names are required. Provide them via --secrets flag or GOLDFINCH_SECRETS environment variable"
+        );
+    };
 
     // Initialize AWS config and client
     let config = aws_config::load_from_env().await;
     let client = Client::new(&config);
 
-    // Fetch the secret value
-    let secret_data = fetch_secret(&client, &secret_id).await?;
+    // Fetch all secrets and merge their data
+    let mut merged_data = BTreeMap::new();
+    for secret_id in &secret_ids {
+        let secret_data = fetch_secret(&client, secret_id).await?;
+        for (key, value) in secret_data {
+            merged_data.insert(key, value);
+        }
+    }
 
     match cli.command {
-        Commands::List => list_keys(&secret_data, cli.format)?,
-        Commands::Get { key } => get_key(&secret_data, &key, cli.format)?,
-        Commands::Search { pattern } => search_keys(&secret_data, &pattern, cli.format)?,
+        Commands::List => list_keys(&merged_data, cli.format)?,
+        Commands::Get { key } => get_key(&merged_data, &key, cli.format)?,
+        Commands::Search { pattern } => search_keys(&merged_data, &pattern, cli.format)?,
     }
 
     Ok(())
