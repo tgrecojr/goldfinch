@@ -4,19 +4,18 @@ A command-line tool for reading key-value pairs from AWS Secrets Manager secrets
 
 ## Features
 
-- **List all keys**: Display all keys across all specified secrets
+- **List all keys**: Display all keys across all secrets in your AWS account
 - **Get by exact key name**: Retrieve a specific key's value from any secret
 - **Search**: Find keys matching a substring pattern across all secrets
-- **Multiple secrets**: Work with one or more AWS secrets simultaneously
+- **Automatic discovery**: Automatically searches all AWS secrets in your account
 - **Flexible output**: JSON format (default) or plain text
 - **Read-only**: Safe operations with no ability to modify or create secrets
-- **Flexible configuration**: Specify target secrets via CLI argument or environment variable
 
 ## How it Works
 
-Goldfinch can target one or more AWS Secrets that contain JSON key-value pairs. When multiple secrets are specified, their key-value pairs are merged together. The commands operate on the combined keys and values from all secrets.
+Goldfinch automatically discovers and reads all AWS Secrets Manager secrets in your AWS account that contain JSON key-value pairs. The key-value pairs from all secrets are merged together, and commands operate on the combined keys and values.
 
-For example, if you have two secrets:
+For example, if you have two secrets in your account:
 
 **Secret 1: `my-app-config`**
 ```json
@@ -34,7 +33,7 @@ For example, if you have two secrets:
 }
 ```
 
-You can work with both secrets together, and Goldfinch will merge all keys from both secrets for listing, searching, and retrieval.
+Goldfinch will automatically merge all keys from both secrets for listing, searching, and retrieval operations.
 
 ## Prerequisites
 
@@ -64,45 +63,16 @@ This will install `goldfinch` to your Cargo bin directory (usually `~/.cargo/bin
 
 ## Usage
 
-### Specifying target secrets
-
-You can specify which AWS secrets to target in two ways:
-
-**Option 1: Command-line argument** (takes precedence)
-```bash
-# Single secret
-goldfinch --secrets my-app-secrets list
-goldfinch -s my-app-secrets list
-
-# Multiple secrets (comma-separated)
-goldfinch --secrets my-app-config,my-app-urls list
-goldfinch -s secret1,secret2,secret3 list
-```
-
-**Option 2: Environment variable**
-```bash
-# Single secret
-export GOLDFINCH_SECRETS=my-app-secrets
-goldfinch list
-
-# Multiple secrets (comma-separated)
-export GOLDFINCH_SECRETS=my-app-config,my-app-urls
-goldfinch list
-```
-
-The CLI argument will override the environment variable if both are provided.
+Goldfinch automatically operates on all secrets in your AWS account. You don't need to specify which secrets to use.
 
 ### List all keys
 
 ```bash
-# JSON format (default) - single secret
-goldfinch --secrets my-app-secrets list
+# JSON format (default)
+goldfinch list
 
-# Plain text format - single secret
-goldfinch --secrets my-app-secrets list --format plain
-
-# Multiple secrets - merges all keys
-goldfinch --secrets my-app-config,my-app-urls list
+# Plain text format
+goldfinch list --format plain
 ```
 
 Output (JSON):
@@ -127,13 +97,10 @@ staging_db_url
 
 ```bash
 # JSON format with metadata
-goldfinch --secrets my-app-secrets get db_password
+goldfinch get db_password
 
 # Plain text format (just the value)
-goldfinch --secrets my-app-secrets get db_password --format plain
-
-# Search across multiple secrets
-goldfinch --secrets my-app-config,my-app-urls get prod_db_url
+goldfinch get db_password --format plain
 ```
 
 Output (JSON):
@@ -151,14 +118,14 @@ secret123
 
 ### Search for keys
 
-Search uses substring matching - it will find any key whose name contains the pattern across all specified secrets:
+Search uses substring matching - it will find any key whose name contains the pattern across all secrets:
 
 ```bash
 # Find all keys containing "db" across all secrets
-goldfinch --secrets my-app-config,my-app-urls search db
+goldfinch search db
 
 # Find all keys containing "url" in plain format
-goldfinch --secrets my-app-config,my-app-urls search url --format plain
+goldfinch search url --format plain
 ```
 
 Output (JSON):
@@ -188,44 +155,24 @@ staging_db_url: https://staging.example.com
 
 ## Common Use Cases
 
-**Set default secrets via environment variable:**
+**List all available keys:**
 ```bash
-# Single secret
-export GOLDFINCH_SECRETS=my-app-secrets
-goldfinch list
-goldfinch get api_key
-
-# Multiple secrets
-export GOLDFINCH_SECRETS=my-app-config,my-app-urls
 goldfinch list
 ```
 
 **Pipe secret value to another command:**
 ```bash
-goldfinch -s my-app-secrets get db_password --format plain | some-other-command
+goldfinch get db_password --format plain | some-other-command
 ```
 
 **Search and process with jq:**
 ```bash
-goldfinch -s my-app-config,my-app-urls search prod | jq '.[] | .key'
+goldfinch search prod | jq '.[] | .key'
 ```
 
 **Export secret value to environment variable:**
 ```bash
-export API_KEY=$(goldfinch -s my-app-secrets get api_key --format plain)
-```
-
-**Work with multiple secrets from different environments:**
-```bash
-# Combine config and secrets from multiple sources
-goldfinch -s app-base-config,prod-secrets get db_password
-goldfinch -s app-base-config,staging-secrets get db_password
-```
-
-**Merge secrets for comprehensive key listing:**
-```bash
-# List all keys across multiple secret stores
-goldfinch -s team-secrets,app-secrets,infra-secrets list
+export API_KEY=$(goldfinch get api_key --format plain)
 ```
 
 ## Value Type Handling
@@ -240,30 +187,14 @@ Goldfinch handles different JSON value types appropriately:
 
 ## Required AWS Permissions
 
-The application requires the `secretsmanager:GetSecretValue` permission to read secrets.
+The application requires the following AWS Secrets Manager permissions:
 
-**Important:** The example below is a **generic policy** that grants broad access. You should **tailor this policy to your specific needs and environment**. As a security best practice, limit access to only the secrets your application needs to read.
+- `secretsmanager:ListSecrets` - To discover all secrets in your account
+- `secretsmanager:GetSecretValue` - To read secret values
 
-### Generic Policy (NOT recommended for production)
+**Important:** The example below is a **generic policy** that grants broad access. You should **tailor this policy to your specific needs and environment**. As a security best practice, consider limiting access to specific regions or using resource tags.
 
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": [
-        "secretsmanager:GetSecretValue"
-      ],
-      "Resource": "arn:aws:secretsmanager:*:*:secret:*"
-    }
-  ]
-}
-```
-
-### Recommended: Restrict to Specific Secrets
-
-Limit access to only the secrets you need:
+### Generic Policy
 
 ```json
 {
@@ -272,12 +203,10 @@ Limit access to only the secrets you need:
     {
       "Effect": "Allow",
       "Action": [
+        "secretsmanager:ListSecrets",
         "secretsmanager:GetSecretValue"
       ],
-      "Resource": [
-        "arn:aws:secretsmanager:us-east-1:123456789012:secret:my-app-secrets-*",
-        "arn:aws:secretsmanager:us-east-1:123456789012:secret:prod-config-*"
-      ]
+      "Resource": "*"
     }
   ]
 }
@@ -292,6 +221,13 @@ Limit access to only the secrets you need:
     {
       "Effect": "Allow",
       "Action": [
+        "secretsmanager:ListSecrets"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
         "secretsmanager:GetSecretValue"
       ],
       "Resource": "arn:aws:secretsmanager:us-east-1:123456789012:secret:*"
@@ -300,37 +236,18 @@ Limit access to only the secrets you need:
 }
 ```
 
-### Recommended: Use Path-Based Naming with Wildcards
-
-Organize secrets with a naming convention and restrict by prefix:
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": [
-        "secretsmanager:GetSecretValue"
-      ],
-      "Resource": "arn:aws:secretsmanager:us-east-1:123456789012:secret:/myapp/*"
-    }
-  ]
-}
-```
-
-**Note:** AWS Secrets Manager automatically appends a 6-character suffix to secret ARNs (e.g., `-AbCdEf`), which is why wildcards with `-*` are used in the examples above.
+**Note:** The `ListSecrets` action doesn't support resource-level permissions, so it must use `"Resource": "*"`. However, you can restrict `GetSecretValue` to specific resources as shown above.
 
 ## Error Handling
 
 The application provides clear error messages for common issues:
 
-- **No secrets specified**: "Secret names are required. Provide them via --secrets flag or GOLDFINCH_SECRETS environment variable"
+- **Failed to list secrets**: "Failed to list secrets" (if unable to discover secrets in your account)
 - **Secret not found**: "Failed to fetch secret 'name'"
 - **Invalid JSON**: "Secret value is not valid JSON"
 - **Not a JSON object**: "Secret value is not a JSON object with key-value pairs"
-- **Key not found**: "Key 'key-name' not found in secret" (searches across all specified secrets)
-- **No search results**: "No keys found matching pattern 'pattern'" (searches across all specified secrets)
+- **Key not found**: "Key 'key-name' not found in secret" (searches across all secrets)
+- **No search results**: "No keys found matching pattern 'pattern'" (searches across all secrets)
 - **Access denied**: "Not authorized to perform operation"
 
 ## Development
@@ -338,23 +255,9 @@ The application provides clear error messages for common issues:
 ### Run without installing
 
 ```bash
-# With environment variable - single secret
-export GOLDFINCH_SECRETS=my-app-secrets
 cargo run -- list
 cargo run -- get my-key
 cargo run -- search pattern
-
-# With environment variable - multiple secrets
-export GOLDFINCH_SECRETS=my-app-config,my-app-urls
-cargo run -- list
-
-# With CLI argument - single secret
-cargo run -- --secrets my-app-secrets list
-cargo run -- -s my-app-secrets get my-key
-
-# With CLI argument - multiple secrets
-cargo run -- --secrets my-app-config,my-app-urls list
-cargo run -- -s secret1,secret2,secret3 search pattern
 ```
 
 ### Run tests
@@ -397,9 +300,11 @@ cargo fmt
 
 ## Examples
 
-**Example 1: Single Secret**
+**Example: Working with Multiple Secrets**
 
-Given a secret named `app-config` containing:
+Given two secrets in your AWS account:
+
+Secret `app-config`:
 ```json
 {
   "database_url": "postgresql://localhost/mydb",
@@ -410,21 +315,33 @@ Given a secret named `app-config` containing:
 }
 ```
 
+Secret `env-config`:
+```json
+{
+  "app_name": "myapp",
+  "log_level": "info",
+  "api_key": "prod-key-123"
+}
+```
+
 ```bash
-# List all configuration keys
-goldfinch -s app-config list --format plain
+# List all keys from all secrets in your account
+goldfinch list --format plain
 # Output:
+# api_key
 # api_timeout_ms
+# app_name
 # database_url
 # enable_cache
+# log_level
 # redis_host
 # redis_port
 
 # Get database connection string
-DB_URL=$(goldfinch -s app-config get database_url --format plain)
+DB_URL=$(goldfinch get database_url --format plain)
 
 # Find all Redis-related configuration
-goldfinch -s app-config search redis
+goldfinch search redis
 # Output (JSON):
 # [
 #   {
@@ -436,49 +353,18 @@ goldfinch -s app-config search redis
 #     "value": "6379"
 #   }
 # ]
-```
 
-**Example 2: Multiple Secrets**
-
-Given two secrets:
-
-Secret `base-config`:
-```json
-{
-  "app_name": "myapp",
-  "log_level": "info"
-}
-```
-
-Secret `env-config`:
-```json
-{
-  "database_url": "postgresql://prod.db/myapp",
-  "api_key": "prod-key-123"
-}
-```
-
-```bash
-# List all keys from both secrets
-goldfinch -s base-config,env-config list --format plain
-# Output:
-# api_key
-# app_name
-# database_url
-# log_level
-
-# Get a key that exists in the second secret
-goldfinch -s base-config,env-config get api_key --format plain
-# Output:
-# prod-key-123
-
-# Search across both secrets
-goldfinch -s base-config,env-config search app
+# Search across all secrets
+goldfinch search app
 # Output (JSON):
 # [
 #   {
 #     "key": "app_name",
 #     "value": "myapp"
+#   },
+#   {
+#     "key": "api_timeout_ms",
+#     "value": "5000"
 #   }
 # ]
 ```

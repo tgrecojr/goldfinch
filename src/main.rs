@@ -4,17 +4,12 @@ use clap::{Parser, Subcommand, ValueEnum};
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
-use std::env;
 
 #[derive(Parser)]
 #[command(name = "goldfinch")]
 #[command(about = "A CLI tool to read key-value pairs from AWS Secrets", long_about = None)]
 #[command(version)]
 struct Cli {
-    /// AWS Secret names or ARNs (can also be set via GOLDFINCH_SECRETS env var, comma-separated)
-    #[arg(short, long, value_delimiter = ',')]
-    secrets: Vec<String>,
-
     #[command(subcommand)]
     command: Commands,
 
@@ -57,19 +52,12 @@ struct KeyValue {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    let secret_ids = if !cli.secrets.is_empty() {
-        cli.secrets
-    } else if let Ok(env_secrets) = env::var("GOLDFINCH_SECRETS") {
-        env_secrets.split(',').map(|s| s.trim().to_string()).collect()
-    } else {
-        bail!(
-            "Secret names are required. Provide them via --secrets flag or GOLDFINCH_SECRETS environment variable"
-        );
-    };
-
     // Initialize AWS config and client
     let config = aws_config::load_from_env().await;
     let client = Client::new(&config);
+
+    // List all secrets in the account
+    let secret_ids = list_all_secrets(&client).await?;
 
     // Fetch all secrets and merge their data
     let mut merged_data = BTreeMap::new();
@@ -114,6 +102,22 @@ async fn fetch_secret(client: &Client, secret_id: &str) -> Result<BTreeMap<Strin
         }
         _ => bail!("Secret value is not a JSON object with key-value pairs"),
     }
+}
+
+async fn list_all_secrets(client: &Client) -> Result<Vec<String>> {
+    let mut secret_names = Vec::new();
+    let mut paginator = client.list_secrets().into_paginator().send();
+
+    while let Some(result) = paginator.next().await {
+        let output = result.context("Failed to list secrets")?;
+        for secret in output.secret_list() {
+            if let Some(name) = secret.name() {
+                secret_names.push(name.to_string());
+            }
+        }
+    }
+
+    Ok(secret_names)
 }
 
 fn list_keys(secret_data: &BTreeMap<String, Value>, format: OutputFormat) -> Result<()> {
