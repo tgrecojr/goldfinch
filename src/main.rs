@@ -139,7 +139,11 @@ fn list_keys(secret_names: &[String], format: OutputFormat) -> Result<()> {
     Ok(())
 }
 
-fn get_secret(secret_data: &BTreeMap<String, Value>, _secret_name: &str, format: OutputFormat) -> Result<()> {
+fn get_secret(
+    secret_data: &BTreeMap<String, Value>,
+    _secret_name: &str,
+    format: OutputFormat,
+) -> Result<()> {
     match format {
         OutputFormat::Json => {
             println!("{}", serde_json::to_string_pretty(&secret_data)?);
@@ -233,19 +237,22 @@ mod tests {
 
     fn create_test_secrets_with_data() -> BTreeMap<String, BTreeMap<String, Value>> {
         let mut secrets = BTreeMap::new();
-        
+
         // First secret
         let mut secret1 = BTreeMap::new();
         secret1.insert("api_key".to_string(), json!("abc123"));
         secret1.insert("db_password".to_string(), json!("secret123"));
         secrets.insert("my-app-config".to_string(), secret1);
-        
+
         // Second secret
         let mut secret2 = BTreeMap::new();
         secret2.insert("prod_db_url".to_string(), json!("https://prod.example.com"));
-        secret2.insert("staging_db_url".to_string(), json!("https://staging.example.com"));
+        secret2.insert(
+            "staging_db_url".to_string(),
+            json!("https://staging.example.com"),
+        );
         secrets.insert("my-app-urls".to_string(), secret2);
-        
+
         secrets
     }
 
@@ -332,7 +339,10 @@ mod tests {
         let secrets = create_test_secrets_with_data();
         let result = search_keys(&secrets, "xyz_nonexistent", OutputFormat::Plain);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("No secrets or keys found"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("No secrets or keys found"));
     }
 
     #[test]
@@ -370,7 +380,10 @@ mod tests {
         let secrets = create_test_secrets_with_data();
         let result = search_keys(&secrets, "xyz_nonexistent", OutputFormat::Json);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("No secrets or keys found"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("No secrets or keys found"));
     }
 
     #[test]
@@ -405,7 +418,11 @@ mod tests {
 
     #[test]
     fn test_list_keys_preserves_order() {
-        let secret_names = vec!["beta-secret".to_string(), "alpha-secret".to_string(), "gamma-secret".to_string()];
+        let secret_names = vec![
+            "beta-secret".to_string(),
+            "alpha-secret".to_string(),
+            "gamma-secret".to_string(),
+        ];
         // The function should preserve the order provided
         let result = list_keys(&secret_names, OutputFormat::Plain);
         assert!(result.is_ok());
