@@ -260,6 +260,23 @@ The application provides clear error messages for common issues:
 - **No search results**: "No secrets or keys found matching pattern 'pattern'" (searches both secret names and keys)
 - **Access denied**: "Not authorized to perform operation"
 
+## Architecture
+
+The codebase is organized into focused modules:
+
+```
+src/
+├── main.rs      # Entry point, CLI orchestration
+├── cli.rs       # CLI structs (Cli, Commands, OutputFormat, KeyValue)
+├── aws.rs       # AWS operations (fetch_secret, list_all_secrets, fetch_secrets_concurrent)
+└── commands.rs  # Command handlers (list_keys, get_secret, search_keys, value_to_string)
+```
+
+### Performance Features
+
+- **Lazy loading**: The `get` command fetches only the requested secret directly, without listing all secrets first
+- **Concurrent fetching**: The `search` command fetches multiple secrets in parallel for improved performance
+
 ## Development
 
 ### Run without installing
