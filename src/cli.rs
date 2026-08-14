@@ -38,8 +38,19 @@ pub enum OutputFormat {
     Plain,
 }
 
+/// One search result.
+///
+/// `secret` and `key` are kept as separate members rather than joined into a
+/// single `secret/key` string: `/` is legal in both AWS secret names and JSON
+/// keys, so the joined form is not injective and lets a caller who controls a
+/// key name forge attribution to a secret they cannot read.
 #[derive(Serialize)]
 pub struct KeyValue {
-    pub key: String,
+    /// The secret that owns this record.
+    pub secret: String,
+    /// The matched key within the secret, or `None` when the secret's own name
+    /// was what matched.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
     pub value: String,
 }

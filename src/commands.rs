@@ -18,27 +18,46 @@ use crate::cli::{KeyValue, OutputFormat};
 /// unescaped value without failing to compile.
 pub struct Sanitized<'a>(pub &'a str);
 
+/// Like [`Sanitized`], but also escapes `/`.
+///
+/// Used for the secret-name and key components of a search record's display
+/// identifier. `/` is legal inside both, so escaping it is what makes the
+/// rendered `secret/key` form injective (see VULN-003).
+pub struct SanitizedComponent<'a>(pub &'a str);
+
+fn escape_into(f: &mut fmt::Formatter<'_>, s: &str, escape_slash: bool) -> fmt::Result {
+    for c in s.chars() {
+        let u = c as u32;
+        let must_escape = u < 0x20                        // C0 controls
+            || u == 0x7f                                  // DEL
+            || (0x80..=0x9f).contains(&u)                 // C1 controls
+            || (0x202a..=0x202e).contains(&u)             // bidi embedding/override
+            || (0x2066..=0x2069).contains(&u)             // bidi isolates
+            || u == 0x2028                                // line separator
+            || u == 0x2029                                // paragraph separator
+            || (escape_slash && c == '/')
+            || c == '\\'; // so the escape form itself stays unambiguous
+
+        if !must_escape {
+            f.write_str(c.encode_utf8(&mut [0u8; 4]))?;
+        } else if u <= 0xff {
+            write!(f, "\\x{u:02x}")?;
+        } else {
+            write!(f, "\\u{{{u:04x}}}")?;
+        }
+    }
+    Ok(())
+}
+
 impl fmt::Display for Sanitized<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for c in self.0.chars() {
-            let u = c as u32;
-            let unsafe_char = u < 0x20                        // C0 controls
-                || u == 0x7f                                  // DEL
-                || (0x80..=0x9f).contains(&u)                 // C1 controls
-                || (0x202a..=0x202e).contains(&u)             // bidi embedding/override
-                || (0x2066..=0x2069).contains(&u)             // bidi isolates
-                || u == 0x2028                                // line separator
-                || u == 0x2029; // paragraph separator
+        escape_into(f, self.0, false)
+    }
+}
 
-            if !unsafe_char {
-                f.write_str(c.encode_utf8(&mut [0u8; 4]))?;
-            } else if u <= 0xff {
-                write!(f, "\\x{u:02x}")?;
-            } else {
-                write!(f, "\\u{{{u:04x}}}")?;
-            }
-        }
-        Ok(())
+impl fmt::Display for SanitizedComponent<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        escape_into(f, self.0, true)
     }
 }
 
@@ -50,6 +69,29 @@ fn render_plain_record<W: Write>(w: &mut W, key: Sanitized, value: Sanitized) ->
 /// Plain renderer for single-column output (secret names).
 fn render_plain_line<W: Write>(w: &mut W, value: Sanitized) -> io::Result<()> {
     writeln!(w, "{value}")
+}
+
+/// Plain renderer for one search result.
+///
+/// The `secret/key` identifier is composed here rather than pre-joined into the
+/// record, and each component escapes `/`, so the rendered identifier maps back
+/// to exactly one (secret, key) pair.
+fn render_search_record<W: Write>(w: &mut W, kv: &KeyValue) -> io::Result<()> {
+    match &kv.key {
+        Some(key) => writeln!(
+            w,
+            "{}/{}: {}",
+            SanitizedComponent(&kv.secret),
+            SanitizedComponent(key),
+            Sanitized(&kv.value)
+        ),
+        None => writeln!(
+            w,
+            "[secret] {}: {}",
+            SanitizedComponent(&kv.secret),
+            Sanitized(&kv.value)
+        ),
+    }
 }
 
 pub fn list_keys(secret_names: &[String], format: OutputFormat) -> Result<()> {
@@ -118,7 +160,8 @@ pub fn write_search<W: Write>(
         // Check if secret name matches
         if secret_name.contains(pattern) {
             matches.push(KeyValue {
-                key: format!("[Secret] {}", secret_name),
+                secret: secret_name.clone(),
+                key: None,
                 value: format!("{} keys", secret_data.len()),
             });
         }
@@ -127,7 +170,8 @@ pub fn write_search<W: Write>(
         for (key, value) in secret_data {
             if key.contains(pattern) {
                 matches.push(KeyValue {
-                    key: format!("{}/{}", secret_name, key),
+                    secret: secret_name.clone(),
+                    key: Some(key.clone()),
                     value: value_to_string(value),
                 });
             }
@@ -144,7 +188,7 @@ pub fn write_search<W: Write>(
         }
         OutputFormat::Plain => {
             for kv in matches {
-                render_plain_record(w, Sanitized(&kv.key), Sanitized(&kv.value))?;
+                render_search_record(w, &kv)?;
             }
         }
     }
