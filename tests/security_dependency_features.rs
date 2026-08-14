@@ -66,6 +66,34 @@ fn tokio_does_not_link_full_capability_set() {
     );
 }
 
+/// VULN-006 (CWE-1395): the superseded `rustls-webpki 0.101.7` (three RUSTSEC
+/// advisories) was resolved alongside the patched 0.103 line.
+///
+/// It arrives via `rustls 0.21` / `hyper-rustls 0.24`, which
+/// `aws-smithy-http-client` links behind its `legacy-rustls-ring` feature.
+/// That feature is turned on by `aws-sdk-secretsmanager`'s default `rustls`
+/// feature -- not by an out-of-date version pin -- so the fix is to drop the
+/// legacy feature, keeping the modern `default-https-client` (rustls 0.23 +
+/// aws-lc) stack for TLS.
+#[test]
+fn advisory_bearing_tls_stack_is_not_resolved() {
+    let lock = cargo_lock();
+
+    assert!(
+        !lock.contains("name = \"rustls-webpki\"\nversion = \"0.101."),
+        "rustls-webpki 0.101.x is resolved; it carries three RUSTSEC advisories \
+         and is superseded by the 0.103 line"
+    );
+    assert!(
+        !lock.contains("name = \"rustls\"\nversion = \"0.21."),
+        "rustls 0.21.x is resolved; it is the sole path to rustls-webpki 0.101.x"
+    );
+    assert!(
+        !lock.contains("name = \"hyper-rustls\"\nversion = \"0.24."),
+        "hyper-rustls 0.24.x is resolved; it pulls the legacy rustls 0.21 stack"
+    );
+}
+
 #[test]
 fn sso_crates_are_not_resolved() {
     // aws-sdk-sso is reachable only via aws-config's default feature set.
