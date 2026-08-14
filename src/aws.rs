@@ -1,7 +1,22 @@
 use anyhow::{bail, Context, Result};
 use aws_sdk_secretsmanager::Client;
+use futures::stream::StreamExt;
 use serde_json::Value;
 use std::collections::BTreeMap;
+
+/// Maximum GetSecretValue calls in flight at once.
+///
+/// The secret list is enumerated from the account, so its length is influenced
+/// by whoever can call CreateSecret. Without a ceiling, one `search` fans out
+/// one request per secret, exhausting local sockets and spilling AWS-side
+/// throttling onto other workloads.
+pub const MAX_CONCURRENT_FETCHES: usize = 8;
+
+/// Maximum number of secrets a single `search` will materialize.
+///
+/// Bounds resident memory: every fetched body is decrypted and held at once.
+/// Set well above any realistic account so normal use is unaffected.
+pub const MAX_SECRETS: usize = 10_000;
 
 pub async fn fetch_secret(client: &Client, secret_id: &str) -> Result<BTreeMap<String, Value>> {
     let response = client
@@ -46,33 +61,202 @@ pub async fn list_all_secrets(client: &Client) -> Result<Vec<String>> {
     Ok(secret_names)
 }
 
+/// The result of fetching a batch of secrets.
+///
+/// Failures are per-secret and reported alongside the successes rather than
+/// aborting the batch: `list_secrets` returns names the caller may not be
+/// allowed to `get`, so one unreadable secret must not deny the whole search.
+#[derive(Debug)]
+pub struct FetchOutcome {
+    pub secrets: BTreeMap<String, BTreeMap<String, Value>>,
+    pub failures: Vec<(String, anyhow::Error)>,
+}
+
 pub async fn fetch_secrets_concurrent(
     client: &Client,
     secret_ids: &[String],
-) -> Result<BTreeMap<String, BTreeMap<String, Value>>> {
-    let futures: Vec<_> = secret_ids
-        .iter()
-        .map(|id| async move {
-            let data = fetch_secret(client, id).await?;
-            Ok::<_, anyhow::Error>((id.clone(), data))
-        })
-        .collect();
+) -> Result<FetchOutcome> {
+    fetch_all_with(
+        secret_ids,
+        |id| async move { fetch_secret(client, &id).await },
+    )
+    .await
+}
 
-    let results = futures::future::join_all(futures).await;
-
-    let mut secrets_with_data = BTreeMap::new();
-    for result in results {
-        let (id, data) = result?;
-        secrets_with_data.insert(id, data);
+/// Fetch every id in `secret_ids`, using `fetch` to retrieve one secret.
+///
+/// Split out from [`fetch_secrets_concurrent`] so the fan-out behaviour can be
+/// exercised without an AWS client.
+pub async fn fetch_all_with<F, Fut>(secret_ids: &[String], fetch: F) -> Result<FetchOutcome>
+where
+    F: Fn(String) -> Fut,
+    Fut: std::future::Future<Output = Result<BTreeMap<String, Value>>>,
+{
+    if secret_ids.len() > MAX_SECRETS {
+        bail!(
+            "too many secrets to fetch in one operation: {} exceeds the limit of {}",
+            secret_ids.len(),
+            MAX_SECRETS
+        );
     }
 
-    Ok(secrets_with_data)
+    let mut pending = futures::stream::iter(secret_ids.iter().map(|id| {
+        let id = id.clone();
+        let pending = fetch(id.clone());
+        async move { (id, pending.await) }
+    }))
+    .buffer_unordered(MAX_CONCURRENT_FETCHES);
+
+    let mut secrets_with_data = BTreeMap::new();
+    let mut failures = Vec::new();
+    while let Some((id, result)) = pending.next().await {
+        match result {
+            Ok(data) => {
+                secrets_with_data.insert(id, data);
+            }
+            // Per-secret failures are collected rather than propagated: one
+            // unreadable secret must not discard every other result.
+            Err(err) => failures.push((id, err)),
+        }
+    }
+
+    Ok(FetchOutcome {
+        secrets: secrets_with_data,
+        failures,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    /// Records the highest number of fetches in flight at any one moment.
+    #[derive(Default)]
+    struct ConcurrencyProbe {
+        in_flight: AtomicUsize,
+        peak: AtomicUsize,
+    }
+
+    impl ConcurrencyProbe {
+        fn enter(&self) {
+            let now = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+            self.peak.fetch_max(now, Ordering::SeqCst);
+        }
+
+        fn leave(&self) {
+            self.in_flight.fetch_sub(1, Ordering::SeqCst);
+        }
+
+        fn peak(&self) -> usize {
+            self.peak.load(Ordering::SeqCst)
+        }
+    }
+
+    fn ids(n: usize) -> Vec<String> {
+        (0..n).map(|i| format!("secret-{i}")).collect()
+    }
+
+    /// VULN-005 (CWE-770): every GetSecretValue call ran concurrently, so peak
+    /// concurrency equalled the secret count -- which an attacker influences
+    /// via CreateSecret, since the list is enumerated by list_all_secrets.
+    #[tokio::test]
+    async fn fan_out_is_bounded_regardless_of_secret_count() {
+        const N: usize = 500;
+        let probe = Arc::new(ConcurrencyProbe::default());
+
+        let result = fetch_all_with(&ids(N), |id| {
+            let probe = Arc::clone(&probe);
+            async move {
+                probe.enter();
+                // Yield so other futures can interleave; without a bound they
+                // all reach this point together.
+                tokio::task::yield_now().await;
+                probe.leave();
+                let mut data = BTreeMap::new();
+                data.insert("k".to_string(), json!(id));
+                Ok(data)
+            }
+        })
+        .await
+        .expect("all fetches succeed");
+
+        // Updated for VULN-004: fetch_all_with now returns a FetchOutcome
+        // carrying per-secret failures alongside the successes.
+        assert_eq!(
+            result.secrets.len(),
+            N,
+            "every secret must still be fetched"
+        );
+        assert!(
+            probe.peak() <= MAX_CONCURRENT_FETCHES,
+            "fan-out is unbounded: peak concurrency was {} for {N} secrets, \
+             expected at most {MAX_CONCURRENT_FETCHES}",
+            probe.peak()
+        );
+    }
+
+    /// VULN-004 (CWE-755): `result?` propagated the first Err and discarded
+    /// every already-fetched secret, so one unreadable secret denied the whole
+    /// search. This fires with no attacker at all -- a least-privilege IAM
+    /// policy makes list_secrets return names the caller cannot get.
+    #[tokio::test]
+    async fn one_unreadable_secret_does_not_abort_the_batch() {
+        let all = ids(5);
+        let outcome = fetch_all_with(&all, |id| async move {
+            if id == "secret-1" {
+                bail!("AccessDeniedException: not authorized to perform GetSecretValue");
+            }
+            let mut data = BTreeMap::new();
+            data.insert("k".to_string(), json!(id));
+            Ok(data)
+        })
+        .await
+        .expect("a single unreadable secret must not fail the whole batch");
+
+        assert_eq!(
+            outcome.secrets.len(),
+            4,
+            "the four readable secrets must survive, got {:?}",
+            outcome.secrets.keys().collect::<Vec<_>>()
+        );
+        assert!(
+            !outcome.secrets.contains_key("secret-1"),
+            "the unreadable secret must not appear as a success"
+        );
+        assert_eq!(
+            outcome.failures.len(),
+            1,
+            "the failure must be reported, not silently swallowed"
+        );
+        assert_eq!(outcome.failures[0].0, "secret-1");
+        assert!(
+            outcome.failures[0].1.to_string().contains("AccessDenied"),
+            "the original error must be preserved: {}",
+            outcome.failures[0].1
+        );
+    }
+
+    /// VULN-005 second sink region: the result map held every decrypted body
+    /// with no ceiling on how many could accumulate.
+    #[tokio::test]
+    async fn materialization_is_capped() {
+        let over = MAX_SECRETS + 1;
+        let result = fetch_all_with(&ids(over), |id| async move {
+            let mut data = BTreeMap::new();
+            data.insert("k".to_string(), json!(id));
+            Ok(data)
+        })
+        .await;
+
+        let err = result.expect_err("a secret count above the cap must be refused");
+        assert!(
+            err.to_string().contains("too many secrets"),
+            "expected a typed over-cap error, got: {err}"
+        );
+    }
 
     #[test]
     fn test_fetch_secret_parsing_valid_json() {
