@@ -1,17 +1,115 @@
 use anyhow::{bail, Result};
 use serde_json::Value;
 use std::collections::BTreeMap;
+use std::fmt;
+use std::io::{self, Write};
 
 use crate::cli::{KeyValue, OutputFormat};
 
+/// A string that renders safely into a plain-text record stream.
+///
+/// Plain output is newline-delimited and goes straight to a terminal, so raw
+/// bytes from secret data can forge record boundaries (`\n`), erase preceding
+/// rows (`\r`), drive the terminal (`ESC`), or reorder the rendered text
+/// (bidi overrides). `Display` escapes all of them to a `\xNN` / `\u{NNNN}`
+/// form.
+///
+/// The plain renderer accepts only this type, so a call site cannot emit an
+/// unescaped value without failing to compile.
+pub struct Sanitized<'a>(pub &'a str);
+
+/// Like [`Sanitized`], but also escapes `/`.
+///
+/// Used for the secret-name and key components of a search record's display
+/// identifier. `/` is legal inside both, so escaping it is what makes the
+/// rendered `secret/key` form injective (see VULN-003).
+pub struct SanitizedComponent<'a>(pub &'a str);
+
+fn escape_into(f: &mut fmt::Formatter<'_>, s: &str, escape_slash: bool) -> fmt::Result {
+    for c in s.chars() {
+        let u = c as u32;
+        let must_escape = u < 0x20                        // C0 controls
+            || u == 0x7f                                  // DEL
+            || (0x80..=0x9f).contains(&u)                 // C1 controls
+            || (0x202a..=0x202e).contains(&u)             // bidi embedding/override
+            || (0x2066..=0x2069).contains(&u)             // bidi isolates
+            || u == 0x2028                                // line separator
+            || u == 0x2029                                // paragraph separator
+            || (escape_slash && c == '/')
+            || c == '\\'; // so the escape form itself stays unambiguous
+
+        if !must_escape {
+            f.write_str(c.encode_utf8(&mut [0u8; 4]))?;
+        } else if u <= 0xff {
+            write!(f, "\\x{u:02x}")?;
+        } else {
+            write!(f, "\\u{{{u:04x}}}")?;
+        }
+    }
+    Ok(())
+}
+
+impl fmt::Display for Sanitized<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        escape_into(f, self.0, false)
+    }
+}
+
+impl fmt::Display for SanitizedComponent<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        escape_into(f, self.0, true)
+    }
+}
+
+/// The single plain-output record renderer. Every plain arm goes through it.
+fn render_plain_record<W: Write>(w: &mut W, key: Sanitized, value: Sanitized) -> io::Result<()> {
+    writeln!(w, "{key}: {value}")
+}
+
+/// Plain renderer for single-column output (secret names).
+fn render_plain_line<W: Write>(w: &mut W, value: Sanitized) -> io::Result<()> {
+    writeln!(w, "{value}")
+}
+
+/// Plain renderer for one search result.
+///
+/// The `secret/key` identifier is composed here rather than pre-joined into the
+/// record, and each component escapes `/`, so the rendered identifier maps back
+/// to exactly one (secret, key) pair.
+fn render_search_record<W: Write>(w: &mut W, kv: &KeyValue) -> io::Result<()> {
+    match &kv.key {
+        Some(key) => writeln!(
+            w,
+            "{}/{}: {}",
+            SanitizedComponent(&kv.secret),
+            SanitizedComponent(key),
+            Sanitized(&kv.value)
+        ),
+        None => writeln!(
+            w,
+            "[secret] {}: {}",
+            SanitizedComponent(&kv.secret),
+            Sanitized(&kv.value)
+        ),
+    }
+}
+
 pub fn list_keys(secret_names: &[String], format: OutputFormat) -> Result<()> {
+    write_keys(&mut io::stdout().lock(), secret_names, format)
+}
+
+pub fn write_keys<W: Write>(
+    w: &mut W,
+    secret_names: &[String],
+    format: OutputFormat,
+) -> Result<()> {
     match format {
         OutputFormat::Json => {
-            println!("{}", serde_json::to_string_pretty(secret_names)?);
+            writeln!(w, "{}", serde_json::to_string_pretty(secret_names)?)?;
         }
         OutputFormat::Plain => {
             for name in secret_names {
-                println!("{}", name);
+                render_plain_line(w, Sanitized(name))?;
             }
         }
     }
@@ -19,13 +117,22 @@ pub fn list_keys(secret_names: &[String], format: OutputFormat) -> Result<()> {
 }
 
 pub fn get_secret(secret_data: &BTreeMap<String, Value>, format: OutputFormat) -> Result<()> {
+    write_secret(&mut io::stdout().lock(), secret_data, format)
+}
+
+pub fn write_secret<W: Write>(
+    w: &mut W,
+    secret_data: &BTreeMap<String, Value>,
+    format: OutputFormat,
+) -> Result<()> {
     match format {
         OutputFormat::Json => {
-            println!("{}", serde_json::to_string_pretty(&secret_data)?);
+            writeln!(w, "{}", serde_json::to_string_pretty(&secret_data)?)?;
         }
         OutputFormat::Plain => {
             for (key, value) in secret_data {
-                println!("{}: {}", key, value_to_string(value));
+                let rendered = value_to_string(value);
+                render_plain_record(w, Sanitized(key), Sanitized(&rendered))?;
             }
         }
     }
@@ -37,6 +144,15 @@ pub fn search_keys(
     pattern: &str,
     format: OutputFormat,
 ) -> Result<()> {
+    write_search(&mut io::stdout().lock(), secrets_with_data, pattern, format)
+}
+
+pub fn write_search<W: Write>(
+    w: &mut W,
+    secrets_with_data: &BTreeMap<String, BTreeMap<String, Value>>,
+    pattern: &str,
+    format: OutputFormat,
+) -> Result<()> {
     let mut matches: Vec<KeyValue> = Vec::new();
 
     // Search through secret names and their keys
@@ -44,7 +160,8 @@ pub fn search_keys(
         // Check if secret name matches
         if secret_name.contains(pattern) {
             matches.push(KeyValue {
-                key: format!("[Secret] {}", secret_name),
+                secret: secret_name.clone(),
+                key: None,
                 value: format!("{} keys", secret_data.len()),
             });
         }
@@ -53,7 +170,8 @@ pub fn search_keys(
         for (key, value) in secret_data {
             if key.contains(pattern) {
                 matches.push(KeyValue {
-                    key: format!("{}/{}", secret_name, key),
+                    secret: secret_name.clone(),
+                    key: Some(key.clone()),
                     value: value_to_string(value),
                 });
             }
@@ -66,11 +184,11 @@ pub fn search_keys(
 
     match format {
         OutputFormat::Json => {
-            println!("{}", serde_json::to_string_pretty(&matches)?);
+            writeln!(w, "{}", serde_json::to_string_pretty(&matches)?)?;
         }
         OutputFormat::Plain => {
             for kv in matches {
-                println!("{}: {}", kv.key, kv.value);
+                render_search_record(w, &kv)?;
             }
         }
     }
