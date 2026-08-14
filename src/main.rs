@@ -1,14 +1,10 @@
-mod aws;
-mod cli;
-mod commands;
-
 use anyhow::Result;
 use aws_sdk_secretsmanager::Client;
 use clap::Parser;
 
-use aws::{fetch_secret, fetch_secrets_concurrent, list_all_secrets};
-use cli::{Cli, Commands};
-use commands::{get_secret, list_keys, search_keys};
+use goldfinch::aws::{fetch_secret, fetch_secrets_concurrent, list_all_secrets};
+use goldfinch::cli::{Cli, Commands};
+use goldfinch::commands::{get_secret, list_keys, search_keys};
 
 #[tokio::main]
 async fn main() -> Result<()> {
