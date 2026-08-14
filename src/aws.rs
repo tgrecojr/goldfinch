@@ -61,21 +61,33 @@ pub async fn list_all_secrets(client: &Client) -> Result<Vec<String>> {
     Ok(secret_names)
 }
 
+/// The result of fetching a batch of secrets.
+///
+/// Failures are per-secret and reported alongside the successes rather than
+/// aborting the batch: `list_secrets` returns names the caller may not be
+/// allowed to `get`, so one unreadable secret must not deny the whole search.
+#[derive(Debug)]
+pub struct FetchOutcome {
+    pub secrets: BTreeMap<String, BTreeMap<String, Value>>,
+    pub failures: Vec<(String, anyhow::Error)>,
+}
+
 pub async fn fetch_secrets_concurrent(
     client: &Client,
     secret_ids: &[String],
-) -> Result<BTreeMap<String, BTreeMap<String, Value>>> {
-    fetch_all_with(secret_ids, |id| async move { fetch_secret(client, &id).await }).await
+) -> Result<FetchOutcome> {
+    fetch_all_with(
+        secret_ids,
+        |id| async move { fetch_secret(client, &id).await },
+    )
+    .await
 }
 
 /// Fetch every id in `secret_ids`, using `fetch` to retrieve one secret.
 ///
 /// Split out from [`fetch_secrets_concurrent`] so the fan-out behaviour can be
 /// exercised without an AWS client.
-pub async fn fetch_all_with<F, Fut>(
-    secret_ids: &[String],
-    fetch: F,
-) -> Result<BTreeMap<String, BTreeMap<String, Value>>>
+pub async fn fetch_all_with<F, Fut>(secret_ids: &[String], fetch: F) -> Result<FetchOutcome>
 where
     F: Fn(String) -> Fut,
     Fut: std::future::Future<Output = Result<BTreeMap<String, Value>>>,
@@ -91,17 +103,27 @@ where
     let mut pending = futures::stream::iter(secret_ids.iter().map(|id| {
         let id = id.clone();
         let pending = fetch(id.clone());
-        async move { Ok::<_, anyhow::Error>((id, pending.await?)) }
+        async move { (id, pending.await) }
     }))
     .buffer_unordered(MAX_CONCURRENT_FETCHES);
 
     let mut secrets_with_data = BTreeMap::new();
-    while let Some(result) = pending.next().await {
-        let (id, data) = result?;
-        secrets_with_data.insert(id, data);
+    let mut failures = Vec::new();
+    while let Some((id, result)) = pending.next().await {
+        match result {
+            Ok(data) => {
+                secrets_with_data.insert(id, data);
+            }
+            // Per-secret failures are collected rather than propagated: one
+            // unreadable secret must not discard every other result.
+            Err(err) => failures.push((id, err)),
+        }
     }
 
-    Ok(secrets_with_data)
+    Ok(FetchOutcome {
+        secrets: secrets_with_data,
+        failures,
+    })
 }
 
 #[cfg(test)]
@@ -161,12 +183,59 @@ mod tests {
         .await
         .expect("all fetches succeed");
 
-        assert_eq!(result.len(), N, "every secret must still be fetched");
+        // Updated for VULN-004: fetch_all_with now returns a FetchOutcome
+        // carrying per-secret failures alongside the successes.
+        assert_eq!(
+            result.secrets.len(),
+            N,
+            "every secret must still be fetched"
+        );
         assert!(
             probe.peak() <= MAX_CONCURRENT_FETCHES,
             "fan-out is unbounded: peak concurrency was {} for {N} secrets, \
              expected at most {MAX_CONCURRENT_FETCHES}",
             probe.peak()
+        );
+    }
+
+    /// VULN-004 (CWE-755): `result?` propagated the first Err and discarded
+    /// every already-fetched secret, so one unreadable secret denied the whole
+    /// search. This fires with no attacker at all -- a least-privilege IAM
+    /// policy makes list_secrets return names the caller cannot get.
+    #[tokio::test]
+    async fn one_unreadable_secret_does_not_abort_the_batch() {
+        let all = ids(5);
+        let outcome = fetch_all_with(&all, |id| async move {
+            if id == "secret-1" {
+                bail!("AccessDeniedException: not authorized to perform GetSecretValue");
+            }
+            let mut data = BTreeMap::new();
+            data.insert("k".to_string(), json!(id));
+            Ok(data)
+        })
+        .await
+        .expect("a single unreadable secret must not fail the whole batch");
+
+        assert_eq!(
+            outcome.secrets.len(),
+            4,
+            "the four readable secrets must survive, got {:?}",
+            outcome.secrets.keys().collect::<Vec<_>>()
+        );
+        assert!(
+            !outcome.secrets.contains_key("secret-1"),
+            "the unreadable secret must not appear as a success"
+        );
+        assert_eq!(
+            outcome.failures.len(),
+            1,
+            "the failure must be reported, not silently swallowed"
+        );
+        assert_eq!(outcome.failures[0].0, "secret-1");
+        assert!(
+            outcome.failures[0].1.to_string().contains("AccessDenied"),
+            "the original error must be preserved: {}",
+            outcome.failures[0].1
         );
     }
 

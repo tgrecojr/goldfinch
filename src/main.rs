@@ -30,8 +30,13 @@ async fn main() -> Result<()> {
         }
         Commands::Search { pattern } => {
             let secret_ids = list_all_secrets(&client).await?;
-            let secrets_with_data = fetch_secrets_concurrent(&client, &secret_ids).await?;
-            search_keys(&secrets_with_data, pattern, cli.format)?;
+            let outcome = fetch_secrets_concurrent(&client, &secret_ids).await?;
+            // Report unreadable secrets on stderr so they are visible without
+            // suppressing results for the ones that were readable.
+            for (id, err) in &outcome.failures {
+                eprintln!("warning: skipping secret '{}': {}", id, err);
+            }
+            search_keys(&outcome.secrets, pattern, cli.format)?;
         }
     }
 
