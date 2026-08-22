@@ -38,10 +38,8 @@ fn aws_config_does_not_link_credentials_process_provider() {
         !line.contains("credentials-process"),
         "aws-config must not re-enable credentials-process; got: {line}"
     );
-    assert!(
-        !line.contains("\"sso\""),
-        "aws-config must not re-enable sso; got: {line}"
-    );
+    // `sso` is deliberately re-enabled: AWS SSO profiles are a supported auth
+    // path for goldfinch and the SSO provider carries no shell-exec primitive.
 }
 
 /// VULN-008 (CWE-1164): `tokio = ["full"]` links process, signal, fs and net
@@ -94,13 +92,41 @@ fn advisory_bearing_tls_stack_is_not_resolved() {
     );
 }
 
+/// Checks the *resolved* feature set of aws-config, not just the manifest line.
+/// `credentials-process` adds no crate of its own, so Cargo.lock cannot act as
+/// a proxy for it; `cargo metadata` reports the features Cargo actually turned
+/// on after unifying every dependent's requests.
 #[test]
-fn sso_crates_are_not_resolved() {
-    // aws-sdk-sso is reachable only via aws-config's default feature set.
-    // Its presence in the lock proves the default set is active.
-    assert!(
-        !cargo_lock().contains("name = \"aws-sdk-sso\""),
-        "aws-sdk-sso is resolved, which means aws-config's default feature set \
-         (including credentials-process) is still linked"
-    );
+fn credentials_process_feature_is_not_resolved() {
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+    let out = std::process::Command::new(cargo)
+        .args(["metadata", "--format-version", "1", "--offline"])
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("cargo metadata must run");
+    assert!(out.status.success(), "cargo metadata failed");
+
+    let meta: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("cargo metadata must emit JSON");
+    let nodes = meta["resolve"]["nodes"]
+        .as_array()
+        .expect("resolve.nodes must be an array");
+
+    let aws_config_nodes: Vec<&serde_json::Value> = nodes
+        .iter()
+        .filter(|n| n["id"].as_str().is_some_and(|id| id.contains("aws-config")))
+        .collect();
+    assert!(!aws_config_nodes.is_empty(), "aws-config must be resolved");
+
+    for node in aws_config_nodes {
+        let features: Vec<&str> = node["features"]
+            .as_array()
+            .map(|f| f.iter().filter_map(|v| v.as_str()).collect())
+            .unwrap_or_default();
+        assert!(
+            !features.contains(&"credentials-process"),
+            "aws-config resolved with credentials-process enabled \
+             (the `sh -c` credential provider); features: {features:?}"
+        );
+    }
 }
