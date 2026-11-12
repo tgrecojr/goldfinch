@@ -1,3 +1,6 @@
+// assert_cmd's AssertError is large by design; these closures only pass it through.
+#![allow(clippy::result_large_err)]
+
 use assert_cmd::Command;
 use predicates::prelude::*;
 
