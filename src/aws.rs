@@ -290,10 +290,7 @@ mod tests {
         let json_string = r#"["item1", "item2"]"#;
         let parsed: Value = serde_json::from_str(json_string).unwrap();
 
-        match parsed {
-            Value::Object(_) => panic!("Should not be an object"),
-            _ => {} // Expected
-        }
+        assert!(!parsed.is_object(), "Should not be an object");
     }
 
     #[test]

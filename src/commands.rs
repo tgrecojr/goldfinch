@@ -260,8 +260,8 @@ mod tests {
         let value = json!(42);
         assert_eq!(value_to_string(&value), "42");
 
-        let float_value = json!(3.14);
-        assert_eq!(value_to_string(&float_value), "3.14");
+        let float_value = json!(2.5);
+        assert_eq!(value_to_string(&float_value), "2.5");
     }
 
     #[test]
