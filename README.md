@@ -390,6 +390,10 @@ goldfinch search app
 # ]
 ```
 
+## Contributing
+
+Issues and pull requests are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md) first.
+
 ## License
 
-This project is open source and available under the MIT License.
+Released under the [MIT License](LICENSE).
